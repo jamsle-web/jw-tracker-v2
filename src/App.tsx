@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getLanguage, getLocale, setLanguage, toStoredLabel, translate } from "./translations";
+import { guardarInforme, obtenerUsuarioId } from "./api";
+
 import { AnimatePresence, motion, useDragControls } from "motion/react";
 import {
   House, CalendarDays, Leaf, Timer, ChartNoAxesColumn, BookOpenText, Bell, Settings,

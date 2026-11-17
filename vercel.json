@@ -1,0 +1,9 @@
+
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://jw-tracker-api.porcenatjamsle07.workers.dev/api/:path*"
+    }
+  ]
+}
