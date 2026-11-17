@@ -1,0 +1,14 @@
+.pwa-install-control{position:fixed;right:18px;bottom:18px;z-index:70;display:grid;justify-items:end;gap:10px;font-family:Manrope,system-ui,sans-serif}
+.pwa-install-button{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 15px;border:1px solid rgba(255,255,255,.55);border-radius:999px;background:rgba(35,83,71,.94);color:#fff;font:700 12px Manrope,system-ui,sans-serif;box-shadow:0 8px 26px rgba(28,66,54,.22);backdrop-filter:blur(16px);cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,background .18s ease}
+.pwa-install-button:hover{transform:translateY(-2px);background:#1e493e;box-shadow:0 12px 30px rgba(28,66,54,.28)}
+.pwa-install-button:focus-visible{outline:2px solid #fff;outline-offset:2px;box-shadow:0 0 0 5px #1e493e}
+.pwa-install-close:focus-visible{outline:3px solid #1e493e;outline-offset:2px}
+.pwa-install-card{position:relative;width:min(340px,calc(100vw - 32px));padding:20px 18px 16px;border:1px solid rgba(198,216,201,.88);border-radius:16px;background:rgba(250,253,250,.97);color:#2c3c31;box-shadow:0 18px 48px rgba(25,49,32,.2);backdrop-filter:blur(18px)}
+.pwa-install-card h2{margin:0 34px 9px 0;font:700 14px Manrope,system-ui,sans-serif}
+.pwa-install-card p{margin:8px 0 0;color:#627267;font:500 11px/1.6 Manrope,system-ui,sans-serif}
+.pwa-install-close{position:absolute;top:10px;right:10px;display:grid;place-items:center;width:34px;height:34px;border:0;border-radius:10px;background:transparent;color:inherit;cursor:pointer}
+.app.dark~.pwa-install-control .pwa-install-card{border-color:#38483b;background:rgba(28,34,29,.97);color:#e4ece5}
+.app.dark~.pwa-install-control .pwa-install-card p{color:#b5c2b7}
+@media(max-width:760px){.pwa-install-control{right:12px;bottom:84px}.pwa-install-button{min-height:42px;padding:0 13px;font-size:11px}}
+@media(prefers-reduced-motion:reduce){.pwa-install-button{transition:none}}
+@media(forced-colors:active){.pwa-install-button,.pwa-install-card,.pwa-install-close{color:CanvasText;background:Canvas;border:1px solid ButtonText;box-shadow:none}.pwa-install-button:focus-visible,.pwa-install-close:focus-visible{outline:2px solid Highlight;outline-offset:3px}}
