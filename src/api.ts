@@ -1,13 +1,6 @@
-
-const API_URL: string | undefined = (
-  import.meta as ImportMeta & {
-    env?: { VITE_API_URL?: string };
-  }
-).env?.VITE_API_URL?.replace(/\/+$/, "");
-
 export interface Informe {
   id?: number;
-  user_id: string;
+  user_id?: string;
   fecha: string;
   horas: number;
   minutos: number;
@@ -21,101 +14,52 @@ export interface Informe {
   notas?: string;
   location?: string;
   companion?: string;
+  created_at?: string;
 }
 
-/**
- * Producción: utiliza el proxy de Vercel.
- * Desarrollo: conecta directamente con Cloudflare.
- */
-function obtenerBaseUrl(): string {
-  if (import.meta.env.PROD) {
-    return "";
+const API_BASE = import.meta.env.PROD
+  ? ""
+  : (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  if (!import.meta.env.PROD && !API_BASE) {
+    throw new Error("Falta VITE_API_URL en .env.local para conectar con Cloudflare.");
   }
 
-  if (!API_URL) {
-    throw new Error("VITE_API_URL no está configurada");
+  const response = await fetch(`${API_BASE}/api${path}`, {
+    ...init,
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...init?.headers,
+    },
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`API ${response.status}: ${detail || response.statusText}`);
   }
 
-  return API_URL;
+  return response.json() as Promise<T>;
 }
 
-/**
- * Identificador local temporal para mantener
- * compatibilidad con el frontend existente.
- *
- * La identidad real la determina la sesión del servidor.
- */
-export function obtenerUsuarioId(): string {
-  const STORAGE_KEY = "jw_tracker_user_id";
-
-  let userId = localStorage.getItem(STORAGE_KEY);
-
-  if (!userId) {
-    userId =
-      typeof crypto !== "undefined" && crypto.randomUUID
-        ? crypto.randomUUID()
-        : `user_${Date.now()}_${Math.random()
-            .toString(36)
-            .substring(2, 9)}`;
-
-    localStorage.setItem(STORAGE_KEY, userId);
-  }
-
-  return userId;
+export function obtenerInformes(): Promise<Informe[]> {
+  return request<Informe[]>("/informes");
 }
 
-/**
- * Obtener informes del usuario autenticado.
- */
-export async function obtenerInformes(
-  userId: string
-): Promise<Informe[]> {
-  const respuesta = await fetch(
-    `${obtenerBaseUrl()}/api/informes/${encodeURIComponent(userId)}`,
-    {
-      method: "GET",
-      credentials: "include",
-      headers: {
-        Accept: "application/json",
-      },
-    }
-  );
-
-  if (!respuesta.ok) {
-    throw new Error(
-      `Error al cargar informes (${respuesta.status})`
-    );
-  }
-
-  return respuesta.json();
+export function guardarInforme(informe: Informe, id?: number): Promise<{ success: boolean; id: number }> {
+  return request<{ success: boolean; id: number }>(id ? `/informes/${id}` : "/informes", {
+    method: id ? "PUT" : "POST",
+    body: JSON.stringify(informe),
+  });
 }
 
-/**
- * Guardar informe del usuario autenticado.
- */
-export async function guardarInforme(
-  informe: Informe
-): Promise<Informe> {
-  const respuesta = await fetch(
-    `${obtenerBaseUrl()}/api/informes`,
-    {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify(informe),
-    }
-  );
+export function eliminarInforme(id: number): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(`/informes/${id}`, { method: "DELETE" });
+}
 
-  if (!respuesta.ok) {
-    const detalle = await respuesta.text();
-
-    throw new Error(
-      `Error al guardar informe (${respuesta.status}): ${detalle}`
-    );
-  }
-
-  return respuesta.json();
+export async function obtenerUsuarioId(): Promise<string | null> {
+  const result = await request<{ user?: { id?: string } } | null>("/auth/get-session");
+  return result?.user?.id ?? null;
 }
