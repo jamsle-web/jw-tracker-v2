@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getLanguage, getLocale, setLanguage, toStoredLabel, translate } from "./translations";
+import { eliminarInforme, guardarInforme, obtenerInformes, type Informe } from "./api";
+import { authClient } from "./src/auth-client";
+import AuthScreen from "./src/AuthScreen";
+
 import { AnimatePresence, motion, useDragControls } from "motion/react";
 import {
   House, CalendarDays, Leaf, Timer, ChartNoAxesColumn, BookOpenText, Bell, Settings,
@@ -258,7 +262,43 @@ function scheduleNotification(title: string, time: string, delayMs: number) {
   }
 }
 
+function reportToApi(report:Report):Informe{
+  return {
+    fecha:report.date,
+    horas:report.hours,
+    minutos:report.minutes,
+    credit_hours:report.creditHours,
+    credit_minutes:report.creditMinutes,
+    cursos_biblicos:report.studies,
+    participo:0,
+    studies:report.studies,
+    publications:report.publications,
+    videos:report.videos,
+    notas:report.notes,
+    location:report.location,
+    companion:report.companion,
+  };
+}
+
+function apiReportToLocal(report:Informe):Report{
+  return {
+    id:String(report.id),
+    date:report.fecha,
+    hours:Number(report.horas)||0,
+    minutes:Number(report.minutos)||0,
+    creditHours:Number(report.credit_hours)||0,
+    creditMinutes:Number(report.credit_minutes)||0,
+    studies:Number(report.studies ?? report.cursos_biblicos)||0,
+    publications:Number(report.publications)||0,
+    videos:Number(report.videos)||0,
+    notes:report.notas||"",
+    location:report.location||"",
+    companion:report.companion||"",
+  };
+}
+
 function App(){
+  const { data: authSession, isPending: authPending } = authClient.useSession();
   const [data,setData]=useState(load);
   const [,refreshLocale]=useState(0);
   const [page,setPage]=useState<Page>("Inicio");
@@ -281,6 +321,28 @@ function App(){
   }, []);
 
   useEffect(()=>{localStorage.setItem(KEY,JSON.stringify(data));},[data]);
+
+  // Carga los informes asociados a la sesión autenticada y conserva los datos locales.
+  useEffect(()=>{
+    if(authPending || !authSession?.user?.id) return;
+    let cancelled=false;
+    const syncReports=async()=>{
+      try{
+        const remote=await obtenerInformes();
+        if(cancelled) return;
+        const cloudReports=remote.map(apiReportToLocal);
+        setData(current=>{
+          const cloudIds=new Set(cloudReports.map(report=>report.id));
+          const localOnly=current.reports.filter(report=>!cloudIds.has(report.id));
+          return {...current,reports:[...cloudReports,...localOnly]};
+        });
+      }catch(error){
+        if(!cancelled) setToast(error instanceof Error?`Sincronización pendiente: ${error.message}`:"No se pudieron cargar los informes de la nube.");
+      }
+    };
+    void syncReports();
+    return()=>{cancelled=true;};
+  },[authPending,authSession?.user?.id]);
   useEffect(()=>{
     setLanguage(data.lang);
     document.documentElement.lang=data.lang;
@@ -318,7 +380,27 @@ function App(){
   const openModal=(kind:NonNullable<typeof modal>,id?:string)=>{setEditing(id||null);setModal(kind);};
   const saveEvent=(form:EventItem)=>{update({events:editing?events.map(e=>e.id===editing?form:e):[...events,form]});setModal(null);setToast(translate("Actividad guardada"));};
   const removeEvent=(id:string)=>{update({events:events.filter(e=>e.id!==id)});setToast(translate("Actividad eliminada"));};
-  const saveReport=(form:Report)=>{update({reports:editing?data.reports.map(r=>r.id===editing?form:r):[...data.reports,form]});setModal(null);setToast(translate("Informe guardado"));};
+  const removeReport=async(id:string)=>{
+    try{
+      if(/^\d+$/.test(id)) await eliminarInforme(Number(id));
+      update({reports:data.reports.filter(report=>report.id!==id)});
+      setToast(translate("Informe eliminado"));
+    }catch(error){
+      setToast(error instanceof Error?`No se pudo eliminar: ${error.message}`:"No se pudo eliminar el informe.");
+    }
+  };
+  const saveReport=async(form:Report)=>{
+    try{
+      const saved=await guardarInforme(reportToApi(form),/^\d+$/.test(form.id)?Number(form.id):undefined);
+      const localReport={...form,id:String(saved.id)};
+      update({reports:editing?data.reports.map(r=>r.id===editing?localReport:r):[...data.reports,localReport]});
+      setModal(null);
+      setToast(translate("Informe guardado y sincronizado"));
+    }catch(error){
+      setToast(error instanceof Error?`No se pudo sincronizar: ${error.message}`:"No se pudo guardar el informe.");
+      throw error;
+    }
+  };
   const saveTalk=async(form:TalkDraft)=>{
     const {newFiles,removeAttachmentIds,attachments,...talk}=form;
     const storedFiles=newFiles.map(file=>({id:uid(),name:file.name,type:file.type,size:file.size,blob:file}));
@@ -419,7 +501,14 @@ function App(){
   const upcomingEnd=new Date(today()+"T12:00:00");upcomingEnd.setDate(upcomingEnd.getDate()+30);
   const activeEvents=[...events.filter(event=>event.date>=today()&&!event.done),...meetingOccurrences(data.meetingSchedules,today(),dateKey(upcomingEnd))].sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).slice(0,4);
 
-  // AQUÍ ESTABA EL ERROR: FALTABA ESTE BLOQUE COMPLETO
+  if(authPending){
+    return <div className={`app ${data.theme}`}><div className="splash-screen"><div className="splash-card"><Brand/><p className="splash-text">{translate("Comprobando tu sesión…")}</p></div></div></div>;
+  }
+  if(!authSession?.user){
+    return <AuthScreen onAuthenticated={()=>window.location.reload()} />;
+  }
+
+  // Pantalla de carga original de JW Tracker.
   if (loading) {
     return (
       <div className={`app ${data.theme}`}>
@@ -472,7 +561,7 @@ function App(){
       <nav aria-label={translate("Navegación principal")}>{nav.map(n=><button key={n.name} className={`nav-item ${page===n.name?"active":""}`} aria-current={page===n.name?"page":undefined} onClick={()=>setPage(n.name)}><n.icon size={18}/><span>{translate(n.name)}</span>{n.name==="Recordatorios"&&data.reminders.filter(r=>r.enabled).length>0&&<i/>}</button>)}</nav>
       <div className="sidebar-bottom">
         <div className="profile-chip"><button className="profile-chip-main" onClick={()=>setPage("Perfil")} aria-label={translate("Abrir perfil")}><div className="avatar"><UserRound size={17}/></div><div className="profile-copy"><b>{data.profile.name||translate("Mi espacio")}</b><small>{data.profile.congregation||translate("Añadir congregación")}</small></div></button><button className="profile-settings-button" onClick={()=>setPage("Ajustes")} aria-label={translate("Abrir ajustes")}><MoreHorizontal size={17}/></button></div>
-        <div className="local-note"><span className="status-dot"/> {translate("Datos guardados en este dispositivo")}</div>
+        <div className="local-note"><span className="status-dot"/> {translate("Informes en la nube · resto en este dispositivo")}</div><button className="text-button" type="button" onClick={()=>{void authClient.signOut();}}>{translate("Cerrar sesión")}</button>
       </div>
     </aside>
     <header className="mobile-header"><button className="icon-button" onClick={()=>setMobileMenu(!mobileMenu)} aria-label={translate(mobileMenu?"Cerrar menú":"Abrir menú")} aria-expanded={mobileMenu} aria-controls="mobile-menu"><Menu/></button><Brand compact/><button className="icon-button" onClick={()=>setPage("Perfil")} aria-label={translate("Abrir perfil")}><UserRound/></button></header>
@@ -484,7 +573,7 @@ function App(){
         {page==="Calendario"&&<CalendarPage month={month} setMonth={setMonth} selected={selectedDate} setSelected={setSelectedDate} events={monthEvents} add={()=>openModal("event")} edit={(id:string)=>openModal("event",id)} remove={removeEvent} />}
         {page==="Rutinas"&&<Routines done={data.routineDone} streak={routineStreak} toggle={(key:string)=>update({routineDone:{...data.routineDone,[today()+":"+key]:!data.routineDone[today()+":"+key]}})} />}
         {page==="Enfoque"&&<FocusPage sessions={data.focusSessions} onSave={saveFocusSession} onRemove={removeFocusSession}/>}
-        {page==="Servicio"&&<ServicePage reports={data.reports} save={()=>openModal("report")} edit={(id:string)=>openModal("report",id)} remove={(id:string)=>update({reports:data.reports.filter(r=>r.id!==id)})} service={serviceMinutes} credit={creditMinutes} exportSummary={exportMonthlySummary}/>}
+        {page==="Servicio"&&<ServicePage reports={data.reports} save={()=>openModal("report")} edit={(id:string)=>openModal("report",id)} remove={removeReport} service={serviceMinutes} credit={creditMinutes} exportSummary={exportMonthlySummary}/>}
         {page==="Discursos"&&<TalksPage talks={data.talks} add={()=>openModal("talk")} edit={(id:string)=>openModal("talk",id)} remove={removeTalk} downloadAttachment={downloadTalkAttachment} onBibleReference={(reference:string)=>{setActiveBibleReference(reference);setBiblePanelMinimized(false);}}/>}
         {page==="Recordatorios"&&<RemindersPage reminders={data.reminders} add={()=>openModal("reminder")} edit={(id:string)=>openModal("reminder",id)} toggle={(id:string)=>update({reminders:data.reminders.map(r=>r.id===id?{...r,enabled:!r.enabled}:r)})} remove={(id:string)=>update({reminders:data.reminders.filter(r=>r.id!==id)})}/>}
         {page==="Reuniones"&&<MeetingsPage schedules={data.meetingSchedules} preparations={data.meetingPreparations} saveSchedule={saveMeetingSchedule} removeSchedule={removeMeetingSchedule} savePreparation={saveMeetingPreparation} togglePreparation={toggleMeetingPreparation} removePreparation={removeMeetingPreparation}/>}
