@@ -437,10 +437,15 @@ useEffect(() => {
   },[data.lang]);
   useEffect(()=>{if(!toast)return;const t=setTimeout(()=>setToast(""),2600);return()=>clearTimeout(t);},[toast]);
   
-  useEffect(() => {
-    const timer = setTimeout(() => setLoading(false), 2000);
-    return () => clearTimeout(timer);
-  }, []);
+ useEffect(() => {
+  if (authPending || !authSession?.user?.id) return;
+
+  const timer = window.setTimeout(() => {
+    setLoading(false);
+  }, 5000);
+
+  return () => window.clearTimeout(timer);
+}, [authPending, authSession?.user?.id]);
 
   const update=(patch:Partial<typeof data>)=>setData(d=>({...d,...patch}));
   const t = TRANSLATIONS[data.lang || 'es'];
@@ -533,7 +538,7 @@ useEffect(() => {
   const removeFocusSession=(id:string)=>{setData(current=>({...current,focusSessions:current.focusSessions.filter(session=>session.id!==id)}));setToast(translate("Sesión eliminada"));};
   const exportData=()=>{const backup={...data,talks:data.talks.map(({attachments:_attachments,...talk})=>talk)};downloadBlob(new Blob([JSON.stringify(backup,null,2)],{type:"application/json"}),"jw-tracker-backup.json");};
   const importData=async(backup:typeof emptyState)=>{
-    if(!window.confirm(translate("Importar esta copia reemplazará los datos actuales de este dispositivo. Los adjuntos actuales también se eliminarán. ¿Deseas continuar?")))return false;
+    if(!window.confirm(translate("Importar esta copia reemplazará los datos generales actuales de la aplicación. Los informes se gestionan por separado y los adjuntos locales actuales se eliminarán. ¿Deseas continuar?")))return false;
     const currentAttachmentIds=data.talks.flatMap(talk=>talk.attachments.map(attachment=>attachment.id));
     if(currentAttachmentIds.length)await updateStoredAttachments([],currentAttachmentIds);
     setData(backup);
@@ -571,7 +576,7 @@ useEffect(() => {
   };
 
   const resetData=async()=>{
-    if(!confirm(translate("¿Borrar todos los datos guardados en este dispositivo, incluidos los adjuntos?")))return;
+    if(!confirm(translate("¿Reiniciar los datos de la aplicación y eliminar los adjuntos locales? Los informes guardados en el servidor se gestionan por separado.")))return;
     try{
       const attachmentIds=data.talks.flatMap(talk=>talk.attachments.map(attachment=>attachment.id));
       if(attachmentIds.length)await updateStoredAttachments([],attachmentIds);
@@ -619,7 +624,7 @@ useEffect(() => {
                   className="splash-progress-fill"
                   initial={{ width: 0 }}
                   animate={{ width: "100%" }}
-                  transition={{ duration: 2, ease: "easeInOut" }}
+                  transition={{ duration: 5, ease: "linear" }}
                 />
               </div>
               
@@ -682,7 +687,59 @@ useEffect(() => {
   </div>;
 }
 
-function Brand({compact=false}:{compact?:boolean}){return <div className="brand"><div className="brand-mark"><svg viewBox="0 0 48 48"><rect width="48" height="48" rx="14" fill="currentColor"/><path d="m14 25 7 7 14-16" fill="none" stroke="#eff8f0" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"/><circle cx="35" cy="33" r="3" fill="#8EB69B"/></svg></div>{!compact&&<div><b>JW Tracker</b><small>{translate("Mi vida espiritual, organizada")}</small></div>}</div>}
+function Brand({ compact = false }: { compact?: boolean }) {
+  return (
+    <div className="brand">
+      <div className="brand-mark">
+        <svg
+          viewBox="0 0 48 48"
+          xmlns="http://www.w3.org/2000/svg"
+          aria-hidden="true"
+          focusable="false"
+        >
+          <circle
+            cx="24"
+            cy="24"
+            r="21.5"
+            fill="currentColor"
+            stroke="#FFFFFF"
+            strokeWidth="2"
+          />
+
+          <text
+            x="24"
+            y="22"
+            textAnchor="middle"
+            fill="#FFFFFF"
+            fontSize="13"
+            fontWeight="800"
+            fontFamily="Arial, sans-serif"
+            letterSpacing="-0.7"
+          >
+            JW
+          </text>
+
+          <path
+            d="M15 28.5 L21 34 L33.5 24"
+            fill="none"
+            stroke="#FFFFFF"
+            strokeWidth="3.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </div>
+
+      {!compact && (
+        <div>
+          <b>JW Tracker</b>
+          <small>{translate("Mi vida espiritual, organizada")}</small>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PageHeading({eyebrow,title,desc,action}:{eyebrow?:string;title:string;desc:string;action?:React.ReactNode}){return <div className="page-heading"><div>{eyebrow&&<div className="eyebrow">{eyebrow}</div>}<h1>{title}</h1><p>{desc}</p></div>{action}</div>}
 
 function Dashboard({name,events,next,service,credit,routines,streak,routineStreak,weeklyFocusSessions,weeklyFocusPercent,todayFocusSeconds,weeklyStudySeconds,goals,monthlyServiceGoalProgress,weeklyStudyGoalProgress,setPage,add,verse,onBibleReference,t}:any){
@@ -1069,24 +1126,137 @@ function BackupImport({onImport}:any){
  </div>;
 }
 
+
 function AdminPage({data,setPage,exportData,importData,reset}:any){
  const completedRoutines=routineList.filter(item=>data.routineDone[today()+":"+item]).length;
+
  return <>
-  <PageHeading eyebrow={translate("GESTIÓN LOCAL")} title={translate("Administrador")} desc={translate("Resumen y herramientas para organizar los datos guardados en este dispositivo.")}/>
-  <div className="admin-notice"><ShieldCheck size={19}/><p><b>{translate("Administración local, no una cuenta segura.")}</b> {translate("Este panel solo administra los datos de este navegador. No hay inicio de sesión, roles ni gestión de otros usuarios.")}</p></div>
-  <div className="stats-grid admin-stats"><StatCard icon={CalendarDays} label={translate("Actividades")} value={data.events.length} detail={translate("En tu calendario")}/><StatCard icon={Users} label={translate("Horarios semanales")} value={data.meetingSchedules.length} detail={translate("Reuniones configuradas")}/><StatCard icon={BookOpenText} label={translate("Preparaciones")} value={data.meetingPreparations.length} detail={translate("Asignaciones personales")}/><StatCard icon={BookMarked} label={translate("Planes de estudio")} value={data.studyPlans.length} detail={translate("Planes creados")}/><StatCard icon={MapPin} label={translate("Seguimientos")} value={data.followUps.length} detail={translate("Tareas anónimas")}/><StatCard icon={ChartNoAxesColumn} label={translate("Informes")} value={data.reports.length} detail={translate("Registros de servicio")}/><StatCard icon={FileText} label={translate("Documentos")} value={data.talks.length} detail={translate("Bosquejos y notas")}/><StatCard icon={Timer} label={translate("Sesiones de enfoque")} value={data.focusSessions.length} detail={translate("Temporizadores completados")}/><StatCard icon={Bell} label={translate("Recordatorios")} value={data.reminders.length} detail={translate("Avisos configurados")}/></div>
-  <div className="admin-grid">
-   <section className="panel"><div className="panel-head"><div><div className="eyebrow">{translate("GESTIÓN")}</div><h3>{translate("Accesos rápidos")}</h3></div><Database size={20}/></div><div className="admin-links">
-    <button className="admin-link" onClick={()=>setPage("Perfil")}><UserRound size={18}/><span><b>{translate("Perfil y congregación")}</b><small>{data.profile.name||translate("Completa la información del perfil")}</small></span><ArrowUpRight size={16}/></button>
-    <button className="admin-link" onClick={()=>setPage("Calendario")}><CalendarDays size={18}/><span><b>{translate("Administrar actividades")}</b><small>{translate("Revisar el calendario y sus registros")}</small></span><ArrowUpRight size={16}/></button>
-    <button className="admin-link" onClick={()=>setPage("Servicio")}><ChartNoAxesColumn size={18}/><span><b>{translate("Revisar informes")}</b><small>{translate("Consultar y editar registros de servicio")}</small></span><ArrowUpRight size={16}/></button>
-    <button className="admin-link" onClick={()=>setPage("Recordatorios")}><Bell size={18}/><span><b>{translate("Gestionar recordatorios")}</b><small>{data.reminders.filter((reminder:any)=>reminder.enabled).length} {translate("activos")}</small></span><ArrowUpRight size={16}/></button>
-   </div></section>
-   <section className="panel admin-data-panel"><div className="panel-head"><div><div className="eyebrow">{translate("RESPALDO Y CONTROL")}</div><h3>{translate("Datos de la aplicación")}</h3></div><Database size={20}/></div><p className="settings-copy">{translate("La copia JSON incluye perfil, calendario, reuniones, planes de estudio, seguimientos anónimos, informes, rutinas, textos de discursos y recordatorios. Los archivos adjuntos se guardan por separado y no se incluyen en el respaldo.")}</p><button className="button secondary full" onClick={exportData}><Download size={16}/> {translate("Descargar copia de seguridad")}</button><BackupImport onImport={importData}/><p className="backup-note">{translate("Al restaurar, los datos actuales y sus adjuntos se reemplazan por los de la copia.")}</p><button className="button danger-outline full" onClick={reset}><Trash2 size={16}/> {translate("Borrar datos de este dispositivo")}</button><button className="text-button admin-help-link" onClick={()=>setPage("Ayuda")}><CircleHelp size={15}/> {translate("Ver ayuda y privacidad")}</button></section>
+  <PageHeading
+   eyebrow={translate("GESTIÓN DE DATOS")}
+   title={translate("Administrador")}
+   desc={translate("Resumen y herramientas para organizar la información de tu cuenta.")}
+  />
+
+  <div className="admin-notice">
+   <ShieldCheck size={19}/>
+   <p>
+    <b>{translate("Cuenta y almacenamiento")}</b>{" "}
+    {translate("Los datos generales pueden sincronizarse con tu cuenta cuando tienes una sesión activa. Los informes se gestionan por separado y los archivos adjuntos permanecen almacenados en este dispositivo.")}
+   </p>
   </div>
-  <div className="admin-footer"><span><Check size={15}/> {translate("Rutinas de hoy:")}{" "}{completedRoutines} {translate("de")}{" "}{routineList.length}</span><span><Database size={15}/> {translate("Almacenamiento local activo")}</span></div>
+
+  <div className="stats-grid admin-stats">
+   <StatCard icon={CalendarDays} label={translate("Actividades")} value={data.events.length} detail={translate("En tu calendario")}/>
+   <StatCard icon={Users} label={translate("Horarios semanales")} value={data.meetingSchedules.length} detail={translate("Reuniones configuradas")}/>
+   <StatCard icon={BookOpenText} label={translate("Preparaciones")} value={data.meetingPreparations.length} detail={translate("Asignaciones personales")}/>
+   <StatCard icon={BookMarked} label={translate("Planes de estudio")} value={data.studyPlans.length} detail={translate("Planes creados")}/>
+   <StatCard icon={MapPin} label={translate("Seguimientos")} value={data.followUps.length} detail={translate("Tareas anónimas")}/>
+   <StatCard icon={ChartNoAxesColumn} label={translate("Informes")} value={data.reports.length} detail={translate("Registros de servicio")}/>
+   <StatCard icon={FileText} label={translate("Documentos")} value={data.talks.length} detail={translate("Bosquejos y notas")}/>
+   <StatCard icon={Timer} label={translate("Sesiones de enfoque")} value={data.focusSessions.length} detail={translate("Temporizadores completados")}/>
+   <StatCard icon={Bell} label={translate("Recordatorios")} value={data.reminders.length} detail={translate("Avisos configurados")}/>
+  </div>
+
+  <div className="admin-grid">
+   <section className="panel">
+    <div className="panel-head">
+     <div>
+      <div className="eyebrow">{translate("GESTIÓN")}</div>
+      <h3>{translate("Accesos rápidos")}</h3>
+     </div>
+     <Database size={20}/>
+    </div>
+
+    <div className="admin-links">
+     <button className="admin-link" onClick={()=>setPage("Perfil")}>
+      <UserRound size={18}/>
+      <span>
+       <b>{translate("Perfil y congregación")}</b>
+       <small>{data.profile.name||translate("Completa la información del perfil")}</small>
+      </span>
+      <ArrowUpRight size={16}/>
+     </button>
+
+     <button className="admin-link" onClick={()=>setPage("Calendario")}>
+      <CalendarDays size={18}/>
+      <span>
+       <b>{translate("Administrar actividades")}</b>
+       <small>{translate("Revisar el calendario y sus registros")}</small>
+      </span>
+      <ArrowUpRight size={16}/>
+     </button>
+
+     <button className="admin-link" onClick={()=>setPage("Servicio")}>
+      <ChartNoAxesColumn size={18}/>
+      <span>
+       <b>{translate("Revisar informes")}</b>
+       <small>{translate("Consultar y editar registros de servicio")}</small>
+      </span>
+      <ArrowUpRight size={16}/>
+     </button>
+
+     <button className="admin-link" onClick={()=>setPage("Recordatorios")}>
+      <Bell size={18}/>
+      <span>
+       <b>{translate("Gestionar recordatorios")}</b>
+       <small>{data.reminders.filter((reminder:any)=>reminder.enabled).length} {translate("activos")}</small>
+      </span>
+      <ArrowUpRight size={16}/>
+     </button>
+    </div>
+   </section>
+
+   <section className="panel admin-data-panel">
+    <div className="panel-head">
+     <div>
+      <div className="eyebrow">{translate("RESPALDO Y CONTROL")}</div>
+      <h3>{translate("Datos de la aplicación")}</h3>
+     </div>
+     <Database size={20}/>
+    </div>
+
+    <p className="settings-copy">
+     {translate("La copia JSON contiene los datos de la aplicación, incluidos los informes exportados. Los archivos adjuntos de los documentos se almacenan por separado y no se incluyen en el respaldo.")}
+    </p>
+
+    <button className="button secondary full" onClick={exportData}>
+     <Download size={16}/> {translate("Descargar copia de seguridad")}
+    </button>
+
+    <BackupImport onImport={importData}/>
+
+    <p className="backup-note">
+     {translate("Al restaurar, se reemplaza el estado de la aplicación y se eliminan los adjuntos locales actuales. Los informes se gestionan por separado y esta restauración no garantiza que se reemplacen en el servidor.")}
+    </p>
+
+
+    <button className="button danger-outline full" onClick={reset}>
+     <Trash2 size={16}/> {translate("Reiniciar datos de la aplicación")}
+    </button>
+
+    <p className="backup-note">
+     {translate("El reinicio también puede sincronizar los datos generales vacíos con tu cuenta. Los informes del servidor se gestionan por separado y no se eliminan automáticamente con esta acción.")}
+    </p>
+
+    <button className="text-button admin-help-link" onClick={()=>setPage("Ayuda")}>
+     <CircleHelp size={15}/> {translate("Ver ayuda y privacidad")}
+    </button>
+   </section>
+  </div>
+
+  <div className="admin-footer">
+   <span>
+    <Check size={15}/> {translate("Rutinas de hoy:")}{" "}
+    {completedRoutines} {translate("de")}{" "}
+    {routineList.length}
+   </span>
+   <span>
+    <Database size={15}/> {translate("Sincronización de cuenta disponible")}
+   </span>
+  </div>
  </>;
 }
+
 
 function GoalSettings({goals,save}:{goals:PersonalGoals;save:(goals:PersonalGoals)=>void}){
  const [weekly,setWeekly]=useState(String(goals.weeklyStudyHours));
@@ -1120,34 +1290,173 @@ function SettingsPage({data,update,exportData,importData,reset,t}:any){
    </div></div>
    <div className="setting-row"><div><b>{t.lang}</b><small>{translate("Elige el idioma")}</small></div><div className="segmented"><button className={data.lang==="es"?"active":""} onClick={()=>update({lang:"es"})}>{translate("ES")}</button><button className={data.lang==="en"?"active":""} onClick={()=>update({lang:"en"})}>{translate("EN")}</button><button className={data.lang==="fr"?"active":""} onClick={()=>update({lang:"fr"})}>{translate("FR")}</button><button className={data.lang==="pt"?"active":""} onClick={()=>update({lang:"pt"})}>{translate("PT")}</button></div></div>
    <div className="setting-row"><div><b>{translate("Sonido de interfaz")}</b><small>{translate("Preferencia de sonido para avisos")}</small></div><button className={`toggle ${data.sound?"on":""}`} aria-pressed={data.sound} aria-label={translate("Activar o desactivar sonido")} onClick={()=>update({sound:!data.sound})}><i/></button></div></section>
-   <section className="panel"><div className="panel-head"><div><div className="eyebrow">{translate("TUS DATOS")}</div><h3>{translate("Respaldo y privacidad")}</h3></div><Database size={20}/></div><p className="settings-copy">{translate("Los datos de la app se guardan en el navegador; los archivos adjuntos se almacenan aparte en este dispositivo. El respaldo JSON no contiene esos archivos.")}</p><button className="button secondary full" onClick={exportData}><Download size={16}/> {translate("Exportar copia de seguridad (.json)")}</button><BackupImport onImport={importData}/><p className="backup-note">{translate("Restaurar una copia reemplazará los datos locales y eliminará los adjuntos actuales.")}</p><button className="button danger-outline full" onClick={reset}><Trash2 size={16}/> {translate("Borrar todos los datos locales")}</button></section>
-   <section className="panel"><div className="eyebrow">{translate("ESTADO DE LA CUENTA")}</div><h3>{translate("Modo local")}</h3><p className="settings-copy">{translate("La versión actual funciona sin cuenta ni servidor. No existe sincronización entre dispositivos ni gestión segura de usuarios.")}</p><span className="connection-pill"><span className="status-dot"/> {translate("Almacenamiento local activo")}</span></section>
+   <section className="panel"><div className="panel-head"><div><div className="eyebrow">{translate("TUS DATOS")}</div><h3>{translate("Respaldo y privacidad")}</h3></div><Database size={20}/></div><p className="settings-copy">{translate("Los datos generales se conservan en el navegador y, cuando tienes una sesión activa, se sincronizan con tu cuenta. Los informes se gestionan por separado. Los archivos adjuntos permanecen en este dispositivo y no se incluyen en el respaldo JSON.")}</p><button className="button secondary full" onClick={exportData}><Download size={16}/> {translate("Exportar copia de seguridad (.json)")}</button><BackupImport onImport={importData}/><p className="backup-note">{translate("Restaurar una copia reemplazará los datos de la aplicación en este dispositivo y eliminará los adjuntos locales actuales. Los informes se gestionan mediante su sincronización independiente.")}</p><button className="button danger-outline full" onClick={reset}><Trash2 size={16}/> {translate("Borrar todos los datos locales")}</button></section>
+   <section className="panel">
+  <div className="eyebrow">{translate("ESTADO DE LA CUENTA")}</div>
+  <h3>{translate("Cuenta y sincronización")}</h3>
+  <p className="settings-copy">
+    {translate("JW Tracker utiliza Better Auth para gestionar las sesiones. Los datos generales de tu cuenta se sincronizan mediante la API de Cloudflare y mantienen una copia local en el navegador. Los informes utilizan endpoints independientes; los archivos adjuntos permanecen en este dispositivo.")}
+  </p>
+  <span className="connection-pill">
+    <span className="status-dot"/>
+    {translate("Almacenamiento local y sincronización de cuenta")}
+  </span>
+</section>
   </div>
  </>;
 }
 
-function HelpPage({setPage}:any){
- return <>
-  <PageHeading eyebrow={translate("INFORMACIÓN")} title={translate("Ayuda y privacidad")} desc={translate("Respuestas rápidas para usar JW Tracker con confianza.")}/>
-  <div className="help-actions">
-   <button className="help-action" onClick={()=>setPage("Perfil")}><UserRound size={18}/><span><b>{translate("Configurar mi perfil")}</b><small>{translate("Añade tu nombre y congregación")}</small></span><ArrowUpRight size={16}/></button>
-   <button className="help-action" onClick={()=>setPage("Ajustes")}><Sun size={18}/><span><b>{translate("Cambiar tema")}</b><small>{translate("Elige entre blanco y negro")}</small></span><ArrowUpRight size={16}/></button>
-   <button className="help-action" onClick={()=>setPage("Reuniones")}><Users size={18}/><span><b>{translate("Preparar reuniones")}</b><small>{translate("Horarios y asignaciones personales")}</small></span><ArrowUpRight size={16}/></button>
-   <button className="help-action" onClick={()=>setPage("Estudio")}><BookMarked size={18}/><span><b>{translate("Planes de estudio")}</b><small>{translate("Referencias y notas propias")}</small></span><ArrowUpRight size={16}/></button>
-   <button className="help-action" onClick={()=>setPage("Administrador")}><ShieldCheck size={18}/><span><b>{translate("Panel de administración")}</b><small>{translate("Revisa tus datos locales y respaldos")}</small></span><ArrowUpRight size={16}/></button>
-  </div>
-  <div className="help-list">
-   <article className="panel"><div className="help-title"><Database size={18}/><h3>{translate("¿Dónde se guardan mis datos?")}</h3></div><p>{translate("En esta versión, tus registros se almacenan en el navegador de este dispositivo mediante almacenamiento local. Si borras los datos del navegador o cambias de dispositivo, puedes perder el acceso a ellos. Usa la copia de seguridad para conservarlos.")}</p></article>
-   <article className="panel"><div className="help-title"><FileText size={18}/><h3>{translate("¿Cómo se guardan los adjuntos y referencias?")}</h3></div><p>{translate("Los archivos de discursos se guardan en IndexedDB de este dispositivo; no se sincronizan y no se incluyen en el respaldo JSON. Al restaurar una copia o borrar los datos se eliminan los adjuntos actuales. Las referencias bíblicas abren un panel con un enlace de búsqueda a JW.ORG; el panel no reproduce el texto.")}</p></article>
-   <article className="panel"><div className="help-title"><ShieldCheck size={18}/><h3>{translate("¿Cómo mantener anónimos los seguimientos?")}</h3></div><p>{translate("La sección Seguimiento no solicita nombres ni datos de contacto. Evita escribir información identificable en los campos de notas; el almacenamiento local no está cifrado y cualquier persona con acceso a este dispositivo o a sus respaldos podría ver los registros.")}</p></article>
-   <article className="panel"><div className="help-title"><BookMarked size={18}/><h3>{translate("¿Qué puedo guardar en los planes de estudio?")}</h3></div><p>{translate("Los planes están pensados para tus objetivos, referencias bíblicas y notas personales. No incluyen contenido precargado de publicaciones; consulta las fuentes oficiales para leerlas.")}</p></article>
-   <article className="panel"><div className="help-title"><ShieldCheck size={18}/><h3>{translate("¿El administrador controla cuentas?")}</h3></div><p>{translate("No. El panel de administrador solo resume y gestiona los datos locales del dispositivo. No ofrece inicio de sesión, roles ni administración de otras personas.")}</p></article>
-   <article className="panel"><div className="help-title"><Users size={18}/><h3>{translate("¿Puedo sincronizar con otros dispositivos?")}</h3></div><p>{translate("Aún no. Esta versión no tiene backend ni autenticación; no existe una cuenta en la nube ni sincronización entre dispositivos.")}</p></article>
-   <article className="panel"><div className="help-title"><CircleHelp size={18}/><h3>{translate("¿Es una aplicación oficial?")}</h3></div><p>{translate("No. JW Tracker es un organizador personal independiente y no está afiliado ni respaldado por los Testigos de Jehová ni por ninguna entidad oficial. No sustituye jw.org ni las publicaciones oficiales.")}</p></article>
-   <article className="panel"><div className="help-title"><Bell size={18}/><h3>{translate("¿Cómo funcionan los recordatorios?")}</h3></div><p>{translate("Los avisos de esta versión se procesan mientras la aplicación permanece abierta. Las notificaciones push en segundo plano necesitan service worker, permisos y backend.")}</p></article>
-  </div>
- </>;
+function HelpPage({ setPage }: any) {
+  return (
+    <>
+      <PageHeading
+        eyebrow={translate("INFORMACIÓN")}
+        title={translate("Ayuda y privacidad")}
+        desc={translate("Conoce cómo funciona JW Tracker, dónde se guardan tus datos y cómo proteger tu información.")}
+      />
+
+      <div className="help-actions">
+        <button className="help-action" onClick={() => setPage("Perfil")}>
+          <UserRound size={18} />
+          <span>
+            <b>{translate("Configurar mi perfil")}</b>
+            <small>{translate("Nombre y congregación")}</small>
+          </span>
+          <ArrowUpRight size={16} />
+        </button>
+
+        <button className="help-action" onClick={() => setPage("Ajustes")}>
+          <Sun size={18} />
+          <span>
+            <b>{translate("Personalizar la aplicación")}</b>
+            <small>{translate("Tema, apariencia y preferencias")}</small>
+          </span>
+          <ArrowUpRight size={16} />
+        </button>
+
+        <button className="help-action" onClick={() => setPage("Reuniones")}>
+          <Users size={18} />
+          <span>
+            <b>{translate("Preparar reuniones")}</b>
+            <small>{translate("Horarios y asignaciones personales")}</small>
+          </span>
+          <ArrowUpRight size={16} />
+        </button>
+
+        <button className="help-action" onClick={() => setPage("Estudio")}>
+          <BookMarked size={18} />
+          <span>
+            <b>{translate("Planes de estudio")}</b>
+            <small>{translate("Objetivos, referencias y notas")}</small>
+          </span>
+          <ArrowUpRight size={16} />
+        </button>
+
+        <button className="help-action" onClick={() => setPage("Administrador")}>
+          <ShieldCheck size={18} />
+          <span>
+            <b>{translate("Panel de administración")}</b>
+            <small>{translate("Gestión y respaldo de tus datos")}</small>
+          </span>
+          <ArrowUpRight size={16} />
+        </button>
+      </div>
+
+      <div className="help-list">
+        <article className="panel">
+          <div className="help-title">
+            <Database size={18} />
+            <h3>{translate("¿Dónde se guardan mis datos?")}</h3>
+          </div>
+          <p>
+            {translate("JW Tracker utiliza almacenamiento local y sincronización con el servidor. Los datos generales de tu cuenta se guardan mediante la API de Cloudflare y se conserva una copia local en el navegador para facilitar el funcionamiento de la aplicación.")}
+          </p>
+        </article>
+
+        <article className="panel">
+          <div className="help-title">
+            <ShieldCheck size={18} />
+            <h3>{translate("¿Cómo funciona mi cuenta?")}</h3>
+          </div>
+          <p>
+            {translate("La autenticación utiliza Better Auth. Tu sesión permite identificar tu cuenta y asociar tus datos personales a ella. No compartas tus credenciales con otras personas.")}
+          </p>
+        </article>
+
+        <article className="panel">
+          <div className="help-title">
+            <FileText size={18} />
+            <h3>{translate("¿Qué información se sincroniza?")}</h3>
+          </div>
+          <p>
+            {translate("Los informes de servicio se gestionan mediante endpoints independientes. Los datos generales de la aplicación, como perfil, actividades, rutinas, metas, reuniones y planes de estudio, se sincronizan mediante la API de cuenta. La sincronización requiere conexión a Internet.")}
+          </p>
+        </article>
+
+        <article className="panel">
+          <div className="help-title">
+            <Database size={18} />
+            <h3>{translate("¿Qué ocurre con mis archivos adjuntos?")}</h3>
+          </div>
+          <p>
+            {translate("Los archivos PDF, DOC y DOCX asociados a los discursos se guardan en IndexedDB en este dispositivo. Actualmente no se sincronizan con Cloudflare ni se incluyen en el respaldo JSON. Si utilizas otro dispositivo, tendrás que añadirlos nuevamente.")}
+          </p>
+        </article>
+
+        <article className="panel">
+          <div className="help-title">
+            <ShieldCheck size={18} />
+            <h3>{translate("¿Cómo proteger mi privacidad?")}</h3>
+          </div>
+          <p>
+            {translate("Evita introducir información personal innecesaria en tus notas y seguimientos. Protege tu dispositivo, utiliza una contraseña segura y cierra tu sesión cuando utilices un equipo compartido. La copia local del navegador no debe considerarse un almacenamiento cifrado.")}
+          </p>
+        </article>
+
+        <article className="panel">
+          <div className="help-title">
+            <FileText size={18} />
+            <h3>{translate("¿Cómo funcionan las copias de seguridad?")}</h3>
+          </div>
+          <p>
+            {translate("Puedes utilizar las opciones de respaldo del panel de administración para exportar y restaurar los datos compatibles. El archivo JSON no contiene los archivos adjuntos de los discursos. Conserva tus copias en un lugar seguro.")}
+          </p>
+        </article>
+
+        <article className="panel">
+          <div className="help-title">
+            <BookMarked size={18} />
+            <h3>{translate("¿Cómo funcionan las referencias bíblicas?")}</h3>
+          </div>
+          <p>
+            {translate("JW Tracker permite detectar referencias bíblicas en tus discursos y notas. Puedes seleccionarlas para abrir el panel de consulta y acceder a una búsqueda en JW.ORG.")}
+          </p>
+        </article>
+
+        <article className="panel">
+          <div className="help-title">
+            <Bell size={18} />
+            <h3>{translate("¿Cómo funcionan los recordatorios?")}</h3>
+          </div>
+          <p>
+            {translate("Los recordatorios ayudan a organizar tus actividades. La disponibilidad de avisos depende de las funciones de notificación implementadas y de los permisos de tu dispositivo. No todos los recordatorios implican notificaciones push en segundo plano.")}
+          </p>
+        </article>
+
+        <article className="panel">
+          <div className="help-title">
+            <CircleHelp size={18} />
+            <h3>{translate("¿JW Tracker es una aplicación oficial?")}</h3>
+          </div>
+          <p>
+            {translate("No. JW Tracker es una herramienta independiente de organización personal. No está afiliada, patrocinada ni respaldada por los Testigos de Jehová ni por ninguna entidad oficial. No sustituye a JW.ORG ni a las publicaciones oficiales.")}
+          </p>
+        </article>
+      </div>
+    </>
+  );
 }
+
 
 function Modal({title,close,children}:any){return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)close()}}><motion.div className="modal" initial={{opacity:0,y:15,scale:.98}} animate={{opacity:1,y:0,scale:1}}><div className="modal-head"><h3>{title}</h3><button className="icon-button" aria-label={translate("Cerrar")} onClick={close}><X size={18}/></button></div>{children}</motion.div></div>}
 
