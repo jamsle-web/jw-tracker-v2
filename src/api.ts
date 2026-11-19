@@ -1,3 +1,4 @@
+
 export interface Informe {
   id?: number;
   user_id?: string;
@@ -17,15 +18,9 @@ export interface Informe {
   created_at?: string;
 }
 
-const API_BASE = import.meta.env.PROD
-  ? ""
-  : (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
+const API_BASE = "";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  if (!import.meta.env.PROD && !API_BASE) {
-    throw new Error("Falta VITE_API_URL en .env.local para conectar con Cloudflare.");
-  }
-
   const response = await fetch(`${API_BASE}/api${path}`, {
     ...init,
     credentials: "include",
@@ -48,19 +43,30 @@ export function obtenerInformes(): Promise<Informe[]> {
   return request<Informe[]>("/informes");
 }
 
-export function guardarInforme(informe: Informe, id?: number): Promise<{ success: boolean; id: number }> {
-  return request<{ success: boolean; id: number }>(id ? `/informes/${id}` : "/informes", {
-    method: id ? "PUT" : "POST",
-    body: JSON.stringify(informe),
-  });
+export function guardarInforme(
+  informe: Informe,
+  id?: number
+): Promise<{ success: boolean; id: number }> {
+  return request<{ success: boolean; id: number }>(
+    id ? `/informes/${id}` : "/informes",
+    {
+      method: id ? "PUT" : "POST",
+      body: JSON.stringify(informe),
+    }
+  );
 }
 
 export function eliminarInforme(id: number): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(`/informes/${id}`, { method: "DELETE" });
+  return request<{ success: boolean }>(`/informes/${id}`, {
+    method: "DELETE",
+  });
 }
 
 export async function obtenerUsuarioId(): Promise<string | null> {
-  const result = await request<{ user?: { id?: string } } | null>("/auth/get-session");
+  const result = await request<{ user?: { id?: string } } | null>(
+    "/auth/get-session"
+  );
+
   return result?.user?.id ?? null;
 }
 

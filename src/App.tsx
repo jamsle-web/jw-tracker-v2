@@ -254,7 +254,7 @@ function scheduleNotification(title: string, time: string, delayMs: number) {
       const oscillator = audioCtx.createOscillator();
       const gainNode = audioCtx.createGain();
       oscillator.connect(gainNode); gainNode.connect(audioCtx.destination);
-      oscillator.type = 'sine'; oscillator.frequency.value = 800; 
+      oscillator.type = 'sine'; oscillator.frequency.value = 800;
       gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
       gainNode.gain.linearRampToValueAtTime(0.5, audioCtx.currentTime + 0.05);
       gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
@@ -436,7 +436,7 @@ useEffect(() => {
     refreshLocale(value=>value+1);
   },[data.lang]);
   useEffect(()=>{if(!toast)return;const t=setTimeout(()=>setToast(""),2600);return()=>clearTimeout(t);},[toast]);
-  
+
  useEffect(() => {
   if (authPending || !authSession?.user?.id) return;
 
@@ -449,7 +449,7 @@ useEffect(() => {
 
   const update=(patch:Partial<typeof data>)=>setData(d=>({...d,...patch}));
   const t = TRANSLATIONS[data.lang || 'es'];
-  
+
   const events=data.events;
   const todaysEvents=[...events.filter(event=>event.date===today()),...meetingOccurrences(data.meetingSchedules,today(),today())].sort((a,b)=>a.time.localeCompare(b.time));
   const monthStart=dateKey(new Date(month.getFullYear(),month.getMonth(),1));
@@ -524,7 +524,7 @@ useEffect(() => {
   const saveFollowUp=(followUp:FollowUp)=>{update({followUps:[...data.followUps,followUp]});setToast(translate("Seguimiento guardado"));};
   const toggleFollowUp=(id:string)=>update({followUps:data.followUps.map(item=>item.id===id?{...item,done:!item.done}:item)});
   const removeFollowUp=(id:string)=>{update({followUps:data.followUps.filter(item=>item.id!==id)});setToast(translate("Seguimiento eliminado"));};
-  
+
   const saveReminder=(form:Reminder)=>{
     update({reminders:editing?data.reminders.map(r=>r.id===editing?form:r):[...data.reminders,form]});
     setModal(null);
@@ -533,7 +533,7 @@ useEffect(() => {
     const delay = reminderDate.getTime() - new Date().getTime();
     if (delay > 0) scheduleNotification(form.title, form.time, delay);
   };
-  
+
   const saveFocusSession=(seconds:number,label:string)=>{const session={id:uid(),date:today(),label,seconds};setData(current=>({...current,focusSessions:[...current.focusSessions,session]}));setToast(`${translate("Sesión guardada")}: ${translate(label)} · ${formatDuration(seconds)}`);};
   const removeFocusSession=(id:string)=>{setData(current=>({...current,focusSessions:current.focusSessions.filter(session=>session.id!==id)}));setToast(translate("Sesión eliminada"));};
   const exportData=()=>{const backup={...data,talks:data.talks.map(({attachments:_attachments,...talk})=>talk)};downloadBlob(new Blob([JSON.stringify(backup,null,2)],{type:"application/json"}),"jw-tracker-backup.json");};
@@ -545,7 +545,7 @@ useEffect(() => {
     setToast(translate("Copia de seguridad restaurada"));
     return true;
   };
-  
+
   const exportMonthlySummary=()=>{
     const reports=[...currentMonthReports].sort((a,b)=>a.date.localeCompare(b.date));
     const totals={
@@ -603,13 +603,13 @@ useEffect(() => {
     return (
       <div className={`app ${data.theme}`}>
         <AnimatePresence>
-          <motion.div 
+          <motion.div
             className="splash-screen"
             initial={{ opacity: 1 }}
             exit={{ opacity: 0, filter: "blur(20px)", scale: 1.05 }}
             transition={{ duration: 0.6, ease: "easeInOut" }}
           >
-            <motion.div 
+            <motion.div
               className="splash-card"
               initial={{ opacity: 0, scale: 0.85, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -618,16 +618,16 @@ useEffect(() => {
               <div className="splash-brand">
                 <Brand />
               </div>
-              
+
               <div className="splash-progress-bar">
-                <motion.div 
+                <motion.div
                   className="splash-progress-fill"
                   initial={{ width: 0 }}
                   animate={{ width: "100%" }}
                   transition={{ duration: 5, ease: "linear" }}
                 />
               </div>
-              
+
               <motion.p
                 className="splash-text"
                 initial={{ opacity: 0 }}
@@ -654,8 +654,73 @@ useEffect(() => {
         <div className="local-note"><span className="status-dot"/> {translate("Informes en la nube · resto en este dispositivo")}</div><button className="text-button" type="button" onClick={()=>{void authClient.signOut();}}>{translate("Cerrar sesión")}</button>
       </div>
     </aside>
-    <header className="mobile-header"><button className="icon-button" onClick={()=>setMobileMenu(!mobileMenu)} aria-label={translate(mobileMenu?"Cerrar menú":"Abrir menú")} aria-expanded={mobileMenu} aria-controls="mobile-menu"><Menu/></button><Brand compact/><button className="icon-button" onClick={()=>setPage("Perfil")} aria-label={translate("Abrir perfil")}><UserRound/></button></header>
-    {mobileMenu&&<div className="mobile-drawer"><div className="drawer-head"><Brand/><button className="icon-button" onClick={()=>setMobileMenu(false)} aria-label={translate("Cerrar menú")}><X/></button></div><nav id="mobile-menu" aria-label={translate("Navegación móvil")}>{nav.map(n=><button className={`nav-item ${page===n.name?"active":""}`} aria-current={page===n.name?"page":undefined} key={n.name} onClick={()=>{setPage(n.name);setMobileMenu(false)}}><n.icon size={18}/>{translate(n.name)}</button>)}</nav></div>}
+
+<header className="mobile-header">
+  <Brand compact />
+  <button
+    className="icon-button"
+    onClick={() => setPage("Perfil")}
+    aria-label={translate("Abrir perfil")}
+  >
+    <UserRound />
+  </button>
+</header>
+
+{mobileMenu && (
+  <>
+    <button
+      type="button"
+      className="mobile-sheet-backdrop"
+      aria-label={translate("Cerrar menú")}
+      onClick={() => setMobileMenu(false)}
+    />
+
+    <section
+      className="mobile-sheet"
+      id="mobile-menu"
+      role="dialog"
+      aria-modal="true"
+      aria-label={translate("Más secciones")}
+    >
+      <div className="mobile-sheet-handle" />
+
+      <div className="mobile-sheet-header">
+        <div>
+          <h2>{translate("Más secciones")}</h2>
+          <p>{translate("Accede a todas las herramientas de JW Tracker")}</p>
+        </div>
+
+        <button
+          className="icon-button"
+          type="button"
+          onClick={() => setMobileMenu(false)}
+          aria-label={translate("Cerrar menú")}
+        >
+          <X />
+        </button>
+      </div>
+
+      <nav className="mobile-sheet-grid" aria-label={translate("Otras secciones")}>
+        {nav.slice(4).map(n => (
+          <button
+            key={n.name}
+            type="button"
+            className={`mobile-sheet-item ${page === n.name ? "active" : ""}`}
+            aria-current={page === n.name ? "page" : undefined}
+            onClick={() => {
+              setPage(n.name);
+              setMobileMenu(false);
+            }}
+          >
+            <n.icon size={20} />
+            <span>{translate(n.name)}</span>
+          </button>
+        ))}
+      </nav>
+    </section>
+  </>
+)}
+
     <main className="main" id="main-content" tabIndex={-1}>
       <div className="topline"><div className="breadcrumb">{translate("Mi espacio")}{" "}<span>/</span> {translate(page)}</div><div className="top-actions"><span className="today-pill"><span className="status-dot"/>{dateLabel(today(),{day:"numeric",month:"short"})}</span><button className="icon-button" title={translate("Ajustes")} aria-label={translate("Abrir ajustes")} onClick={()=>setPage("Ajustes")}><Settings size={18}/></button><button className="avatar small" onClick={()=>setPage("Perfil")} aria-label={translate("Abrir perfil")}><UserRound size={15}/></button></div></div>
       <AnimatePresence mode="wait"><motion.div key={page} initial={{opacity:0,y:9}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-5}} transition={{duration:.2}}>
@@ -675,7 +740,34 @@ useEffect(() => {
         {page==="Ayuda"&&<HelpPage setPage={setPage}/>}
       </motion.div></AnimatePresence>
     </main>
-    <nav className="mobile-nav" aria-label={translate("Navegación móvil")}>{nav.slice(0,4).map(n=><button key={n.name} className={page===n.name?"selected":""} aria-current={page===n.name?"page":undefined} onClick={()=>setPage(n.name)}><n.icon size={19}/><span>{translate(n.name)}</span></button>)}<button onClick={()=>setMobileMenu(true)} aria-label={translate("Mostrar más secciones")}><LayoutGrid size={19}/><span>{translate("Más")}</span></button></nav>
+
+<nav className="mobile-nav" aria-label={translate("Navegación móvil")}>
+  {nav.slice(0, 4).map(n => (
+    <button
+      key={n.name}
+      type="button"
+      className={page === n.name ? "selected" : ""}
+      aria-current={page === n.name ? "page" : undefined}
+      onClick={() => setPage(n.name)}
+    >
+      <n.icon size={21} />
+      <span>{translate(n.name)}</span>
+    </button>
+  ))}
+
+  <button
+    type="button"
+    className={mobileMenu || nav.slice(4).some(n => n.name === page) ? "selected" : ""}
+    onClick={() => setMobileMenu(!mobileMenu)}
+    aria-label={translate("Mostrar más secciones")}
+    aria-expanded={mobileMenu}
+    aria-controls="mobile-menu"
+  >
+    <LayoutGrid size={21} />
+    <span>{translate("Más")}</span>
+  </button>
+</nav>
+
     {modal&&    <Modal title={modal==="event"?translate("Nueva actividad"):modal==="report"?translate("Informe de servicio"):modal==="talk"?translate("Documento espiritual"):translate("Nuevo recordatorio")} close={()=>setModal(null)}>
       {modal==="event"&&<EventForm initial={events.find(e=>e.id===editing)} date={selectedDate} save={saveEvent}/>}
       {modal==="report"&&<ReportForm initial={data.reports.find(r=>r.id===editing)} save={saveReport}/>}
@@ -687,47 +779,22 @@ useEffect(() => {
   </div>;
 }
 
+
 function Brand({ compact = false }: { compact?: boolean }) {
   return (
     <div className="brand">
       <div className="brand-mark">
-        <svg
-          viewBox="0 0 48 48"
-          xmlns="http://www.w3.org/2000/svg"
-          aria-hidden="true"
-          focusable="false"
-        >
-          <circle
-            cx="24"
-            cy="24"
-            r="21.5"
-            fill="currentColor"
-            stroke="#FFFFFF"
-            strokeWidth="2"
-          />
-
-          <text
-            x="24"
-            y="22"
-            textAnchor="middle"
-            fill="#FFFFFF"
-            fontSize="13"
-            fontWeight="800"
-            fontFamily="Arial, sans-serif"
-            letterSpacing="-0.7"
-          >
-            JW
-          </text>
-
-          <path
-            d="M15 28.5 L21 34 L33.5 24"
-            fill="none"
-            stroke="#FFFFFF"
-            strokeWidth="3.2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
+        <img
+          src="/favicon.svg"
+          alt="JW Tracker"
+          draggable={false}
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "contain",
+            display: "block",
+          }}
+        />
       </div>
 
       {!compact && (
@@ -739,6 +806,7 @@ function Brand({ compact = false }: { compact?: boolean }) {
     </div>
   );
 }
+
 
 function PageHeading({eyebrow,title,desc,action}:{eyebrow?:string;title:string;desc:string;action?:React.ReactNode}){return <div className="page-heading"><div>{eyebrow&&<div className="eyebrow">{eyebrow}</div>}<h1>{title}</h1><p>{desc}</p></div>{action}</div>}
 
@@ -935,7 +1003,7 @@ function FocusPage({sessions,onSave,onRemove}:any){
       </div>
       <AnimatePresence>
         {isOpen && (
-          <motion.div 
+          <motion.div
             className="select-dropdown glass-panel"
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -943,8 +1011,8 @@ function FocusPage({sessions,onSave,onRemove}:any){
             transition={{ duration: 0.2 }}
           >
             {options.map((opt) => (
-              <div 
-                key={opt} 
+              <div
+                key={opt}
                 className={`select-option ${label === opt ? 'selected' : ''}`}
                 onClick={(e) => {
                   e.stopPropagation();
