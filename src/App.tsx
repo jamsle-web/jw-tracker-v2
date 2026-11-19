@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getLanguage, getLocale, setLanguage, toStoredLabel, translate } from "./translations";
-import { eliminarInforme, guardarInforme, obtenerInformes, type Informe } from "./api";
+import {
+  eliminarInforme,
+  guardarInforme,
+  obtenerInformes,
+  obtenerDatosCuenta,
+  guardarDatosCuenta,
+  type Informe
+} from "./api";
 import { authClient } from "./src/auth-client";
 import AuthScreen from "./src/AuthScreen";
 
@@ -300,6 +307,8 @@ function apiReportToLocal(report:Informe):Report{
 function App(){
   const { data: authSession, isPending: authPending } = authClient.useSession();
   const [data,setData]=useState(load);
+  const [cloudReady,setCloudReady]=useState(false);
+  const syncedUserRef=useRef<string|null>(null);
   const [,refreshLocale]=useState(0);
   const [page,setPage]=useState<Page>("Inicio");
   const [month,setMonth]=useState(new Date());
@@ -319,30 +328,106 @@ function App(){
     }, 8000);
     return () => clearInterval(interval);
   }, []);
+// Guarda los datos localmente después de cargar la información de la cuenta.
+useEffect(() => {
+  if (!cloudReady || !authSession?.user?.id) return;
 
-  useEffect(()=>{localStorage.setItem(KEY,JSON.stringify(data));},[data]);
+  localStorage.setItem(KEY, JSON.stringify(data));
+}, [data, cloudReady, authSession?.user?.id]);
 
-  // Carga los informes asociados a la sesión autenticada y conserva los datos locales.
-  useEffect(()=>{
-    if(authPending || !authSession?.user?.id) return;
-    let cancelled=false;
-    const syncReports=async()=>{
-      try{
-        const remote=await obtenerInformes();
-        if(cancelled) return;
-        const cloudReports=remote.map(apiReportToLocal);
-        setData(current=>{
-          const cloudIds=new Set(cloudReports.map(report=>report.id));
-          const localOnly=current.reports.filter(report=>!cloudIds.has(report.id));
-          return {...current,reports:[...cloudReports,...localOnly]};
-        });
-      }catch(error){
-        if(!cancelled) setToast(error instanceof Error?`Sincronización pendiente: ${error.message}`:"No se pudieron cargar los informes de la nube.");
+// Carga los datos de la cuenta y los informes desde la nube.
+useEffect(() => {
+  const userId = authSession?.user?.id;
+
+  if (authPending || !userId) {
+    setCloudReady(false);
+    syncedUserRef.current = null;
+    return;
+  }
+
+  let cancelled = false;
+
+  setCloudReady(false);
+
+  const syncAccount = async () => {
+    try {
+      const remoteData = await obtenerDatosCuenta<Partial<typeof emptyState>>();
+      const remoteReports = await obtenerInformes();
+
+      if (cancelled) return;
+
+      const cloudReports = remoteReports.map(apiReportToLocal);
+      const cloudIds = new Set(cloudReports.map(report => report.id));
+
+      setData(current => {
+        const localOnlyReports = current.reports.filter(
+          report => !cloudIds.has(report.id)
+        );
+
+        if (remoteData) {
+          return {
+            ...emptyState,
+            ...remoteData,
+            reports: [...cloudReports, ...localOnlyReports],
+          };
+        }
+
+        return {
+          ...current,
+          reports: [...cloudReports, ...localOnlyReports],
+        };
+      });
+
+      syncedUserRef.current = userId;
+      setCloudReady(true);
+
+    } catch (error) {
+      if (!cancelled) {
+        setCloudReady(false);
+        setToast(
+          error instanceof Error
+            ? `Sincronización pendiente: ${error.message}`
+            : "No se pudieron cargar los datos de la nube."
+        );
       }
-    };
-    void syncReports();
-    return()=>{cancelled=true;};
-  },[authPending,authSession?.user?.id]);
+    }
+  };
+
+  void syncAccount();
+
+  return () => {
+    cancelled = true;
+  };
+}, [authPending, authSession?.user?.id]);
+
+// Sincroniza los cambios de la cuenta con la nube.
+useEffect(() => {
+  const userId = authSession?.user?.id;
+
+  if (
+    !cloudReady ||
+    !userId ||
+    syncedUserRef.current !== userId
+  ) {
+    return;
+  }
+
+  const timer = window.setTimeout(() => {
+    const accountData = Object.fromEntries(
+      Object.entries(data).filter(([key]) => key !== "reports")
+    );
+
+    void guardarDatosCuenta(accountData).catch(error => {
+      setToast(
+        error instanceof Error
+          ? `No se pudieron guardar los datos: ${error.message}`
+          : "Error al guardar los datos en la nube."
+      );
+    });
+  }, 700);
+
+  return () => window.clearTimeout(timer);
+}, [data, cloudReady, authSession?.user?.id]);
   useEffect(()=>{
     setLanguage(data.lang);
     document.documentElement.lang=data.lang;
@@ -579,7 +664,7 @@ function App(){
         {page==="Reuniones"&&<MeetingsPage schedules={data.meetingSchedules} preparations={data.meetingPreparations} saveSchedule={saveMeetingSchedule} removeSchedule={removeMeetingSchedule} savePreparation={saveMeetingPreparation} togglePreparation={toggleMeetingPreparation} removePreparation={removeMeetingPreparation}/>}
         {page==="Estudio"&&<StudyPage plans={data.studyPlans} savePlan={saveStudyPlan} removePlan={removeStudyPlan} addItem={addStudyItem} toggleItem={toggleStudyItem} removeItem={removeStudyItem}/>}
         {page==="Seguimiento"&&<FollowUpsPage items={data.followUps} save={saveFollowUp} toggle={toggleFollowUp} remove={removeFollowUp}/>}
-        {page==="Perfil"&&<ProfilePage profile={data.profile} save={saveProfile}/>}
+      {page==="Perfil"&&<ProfilePage profile={data.profile} save={saveProfile} user={authSession.user}/>}
         {page==="Administrador"&&<AdminPage data={data} setPage={setPage} exportData={exportData} importData={importData} reset={resetData}/>}
         {page==="Ajustes"&&<SettingsPage data={data} update={update} exportData={exportData} importData={importData} reset={resetData} t={t}/>}
         {page==="Ayuda"&&<HelpPage setPage={setPage}/>}
@@ -895,10 +980,70 @@ function RemindersPage({reminders,add,edit,toggle,remove}:any){
  </>;
 }
 
-function ProfilePage({profile,save}:any){
- const [name,setName]=useState(profile.name);
- const [congregation,setCongregation]=useState(profile.congregation);
- return <><PageHeading eyebrow={translate("TU ESPACIO")} title={translate("Perfil")} desc={translate("Personaliza tu espacio con tu nombre y congregación.")}/><div className="profile-layout"><section className="panel profile-card"><div className="profile-avatar-large"><UserRound size={28}/></div><div><div className="eyebrow">{translate("PERFIL EN ESTE DISPOSITIVO")}</div><h2>{profile.name||translate("Mi perfil")}</h2><p>{profile.congregation||translate("Aún no has añadido una congregación")}</p></div><span className="connection-pill"><span className="status-dot"/> {translate("Perfil local")}</span></section><section className="panel profile-form"><div className="panel-head"><div><div className="eyebrow">{translate("INFORMACIÓN PERSONAL")}</div><h3>{translate("Datos del perfil")}</h3></div><UserRound size={20}/></div><form onSubmit={e=>{e.preventDefault();save(name.trim(),congregation.trim())}}><label className="field">{translate("Nombre")}<input value={name} onChange={e=>setName(e.target.value)} placeholder={translate("Tu nombre")}/></label><label className="field">{translate("Congregación")}<input value={congregation} onChange={e=>setCongregation(e.target.value)} placeholder={translate("Nombre de la congregación")}/></label><p className="settings-copy">{translate("Estos datos solo se guardan en este navegador y puedes modificarlos cuando quieras.")}</p><button className="button primary" type="submit"><Save size={16}/> {translate("Guardar perfil")}</button></form></section></div></>;
+
+function ProfilePage({profile,save,user}:any){
+ const [name,setName]=useState(profile.name || user?.name || "");
+ const [congregation,setCongregation]=useState(profile.congregation || "");
+
+ useEffect(()=>{
+  setName(profile.name || user?.name || "");
+  setCongregation(profile.congregation || "");
+ },[profile.name,profile.congregation,user?.name]);
+
+ return <>
+  <PageHeading
+   eyebrow={translate("TU ESPACIO")}
+   title={translate("Perfil")}
+   desc={translate("Personaliza tu espacio con tu nombre y congregación.")}
+  />
+  <div className="profile-layout">
+   <section className="panel profile-card">
+    <div className="profile-avatar-large"><UserRound size={28}/></div>
+    <div>
+     <div className="eyebrow">{translate("CUENTA PERSONAL")}</div>
+     <h2>{name || translate("Mi perfil")}</h2>
+     <p>{user?.email || translate("Correo no disponible")}</p>
+     <p>{congregation || translate("Aún no has añadido una congregación")}</p>
+    </div>
+    <span className="connection-pill">
+     <span className="status-dot"/> {translate("Cuenta conectada")}
+    </span>
+   </section>
+
+   <section className="panel profile-form">
+    <div className="panel-head">
+     <div>
+      <div className="eyebrow">{translate("INFORMACIÓN PERSONAL")}</div>
+      <h3>{translate("Datos del perfil")}</h3>
+     </div>
+     <UserRound size={20}/>
+    </div>
+    <form onSubmit={e=>{
+     e.preventDefault();
+     save(name.trim(),congregation.trim());
+    }}>
+     <label className="field">
+      {translate("Nombre")}
+      <input value={name} onChange={e=>setName(e.target.value)} placeholder={translate("Tu nombre")}/>
+     </label>
+     <label className="field">
+      {translate("Correo electrónico")}
+      <input value={user?.email || ""} readOnly/>
+     </label>
+     <label className="field">
+      {translate("Congregación")}
+      <input value={congregation} onChange={e=>setCongregation(e.target.value)} placeholder={translate("Nombre de la congregación")}/>
+     </label>
+     <p className="settings-copy">
+      {translate("Tu cuenta está vinculada a este perfil. Puedes actualizar tu nombre y congregación.")}
+     </p>
+     <button className="button primary" type="submit">
+      <Save size={16}/> {translate("Guardar perfil")}
+     </button>
+    </form>
+   </section>
+  </div>
+ </>;
 }
 
 function BackupImport({onImport}:any){

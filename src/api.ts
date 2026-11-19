@@ -63,3 +63,17 @@ export async function obtenerUsuarioId(): Promise<string | null> {
   const result = await request<{ user?: { id?: string } } | null>("/auth/get-session");
   return result?.user?.id ?? null;
 }
+
+export async function obtenerDatosCuenta<T>(): Promise<T | null> {
+  const result = await request<{ data: T | null }>("/data");
+  return result.data;
+}
+
+export async function guardarDatosCuenta(
+  data: Record<string, unknown>
+): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>("/data", {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
