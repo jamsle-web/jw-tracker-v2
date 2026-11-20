@@ -16,8 +16,9 @@ import {
   House, CalendarDays, Leaf, Timer, ChartNoAxesColumn, BookOpenText, Bell, Settings,
   CircleHelp, LayoutGrid, Plus, ChevronLeft, ChevronRight, Clock3, Check, X, Search,
   Download, Trash2, Pencil, Play, Pause, RotateCcw, Moon, Sun, Sprout, BookMarked,
-  GraduationCap, Users, FileText, CircleCheck, CalendarCheck, Volume2, UserRound,
-  Menu, Save, ExternalLink, Sparkles, ArrowUpRight, MoreHorizontal, ShieldCheck, Database,
+  GraduationCap, Users, FileText, CircleCheck, CalendarCheck, Volume2,
+UserRound, CircleUserRound,
+ Menu, Save, ExternalLink, Sparkles, BookOpen, ArrowUpRight, MoreHorizontal, ShieldCheck, Database,
   Flame, Target, MapPin, Tag, History, Upload, Quote, Globe, ChevronDown, Minus, Maximize2, Move
 } from "lucide-react";
 
@@ -29,7 +30,16 @@ type TalkAttachment = {id:string;name:string;type:string;size:number};
 type StoredTalkAttachment = TalkAttachment & {blob:Blob};
 type TalkDraft = Omit<Talk,"attachments"> & {attachments:TalkAttachment[];newFiles:File[];removeAttachmentIds:string[]};
 type Talk = {id:string;title:string;kind:string;status:string;date:string;content:string;topic?:string;texts?:string;tags?:string[];attachments:TalkAttachment[]};
-type FocusSession = {id:string;date:string;label:string;seconds:number};
+type FocusSession = {
+  id:string;
+  date:string;
+  label:string;
+  seconds:number;
+  mode?:"focus"|"shortBreak"|"longBreak";
+  goal?:string;
+  startedAt?:string;
+  completedAt?:string;
+};
 type Reminder = {id:string;title:string;date:string;time:string;repeat:string;enabled:boolean};
 type MeetingSchedule = {id:string;title:string;weekday:number;time:string};
 type MeetingPreparation = {id:string;date:string;meetingType:string;assignment:string;notes:string;done:boolean};
@@ -88,6 +98,7 @@ const bibleReferencePattern=new RegExp(`(^|[^\\p{L}\\d])(${bibleBookPattern})\\s
 const emptyState={
   events:[] as EventItem[], reports:[] as Report[], talks:[] as Talk[], reminders:[] as Reminder[], focusSessions:[] as FocusSession[],
   meetingSchedules:[] as MeetingSchedule[], meetingPreparations:[] as MeetingPreparation[], studyPlans:[] as StudyPlan[], followUps:[] as FollowUp[],
+  deletedRecords:{} as Record<string,string[]>,
   routineDone:{} as Record<string,boolean>, goals:{weeklyStudyHours:0,monthlyServiceHours:0} as PersonalGoals,
   profile:{name:"",congregation:""}, theme:"light" as "light"|"dark",
   sound:true, accent:"bosque", lang:"es" as "es"|"en"|"fr"|"pt"
@@ -150,7 +161,31 @@ function parseBackup(value:unknown):typeof emptyState{
   if(typeof sound!=="boolean")throw new Error("La copia contiene preferencias no válidas.");
   const lang=backup.lang??emptyState.lang;
   if(typeof lang!=="string"||!["es","en","fr","pt"].includes(lang))throw new Error("La copia contiene un idioma no válido.");
-  return {events:backup.events,reports:backup.reports,talks:backup.talks.map((talk:Talk)=>({...talk,attachments:[]})),reminders:backup.reminders,focusSessions,meetingSchedules,meetingPreparations,studyPlans,followUps,goals:{weeklyStudyHours:goals.weeklyStudyHours,monthlyServiceHours:goals.monthlyServiceHours},routineDone: routineDone as Record<string,boolean>,profile:{name:profile.name,congregation:profile.congregation},theme,sound,accent,lang:lang as any};
+ return {
+  events: backup.events,
+  reports: backup.reports,
+  talks: backup.talks.map((talk: Talk) => ({ ...talk, attachments: [] })),
+  reminders: backup.reminders,
+  focusSessions,
+  meetingSchedules,
+  meetingPreparations,
+  studyPlans,
+  followUps,
+  deletedRecords: (backup.deletedRecords ?? {}) as Record<string, string[]>,
+  goals: {
+    weeklyStudyHours: goals.weeklyStudyHours,
+    monthlyServiceHours: goals.monthlyServiceHours
+  },
+  routineDone: routineDone as Record<string, boolean>,
+  profile: {
+    name: profile.name,
+    congregation: profile.congregation
+  },
+  theme,
+  sound,
+  accent,
+  lang: lang as any
+};
 }
 
 function dateLabel(date:string, opts:Intl.DateTimeFormatOptions={weekday:"long",day:"numeric",month:"long"}){
@@ -268,6 +303,42 @@ function scheduleNotification(title: string, time: string, delayMs: number) {
     Notification.requestPermission().then(permission => { if (permission === "granted") setTimeout(triggerNotification, delayMs); });
   }
 }
+function playFocusCompletionSound(){
+  try{
+    const AudioContextClass =
+      window.AudioContext || (window as any).webkitAudioContext;
+
+    if(!AudioContextClass)return;
+
+    const audioCtx = new AudioContextClass();
+
+    const playTone=(frequency:number,start:number)=>{
+      const oscillator=audioCtx.createOscillator();
+      const gain=audioCtx.createGain();
+
+      oscillator.type="sine";
+      oscillator.frequency.value=frequency;
+
+      oscillator.connect(gain);
+      gain.connect(audioCtx.destination);
+
+      gain.gain.setValueAtTime(0,audioCtx.currentTime+start);
+      gain.gain.linearRampToValueAtTime(0.18,audioCtx.currentTime+start+0.04);
+      gain.gain.exponentialRampToValueAtTime(0.001,audioCtx.currentTime+start+0.35);
+
+      oscillator.start(audioCtx.currentTime+start);
+      oscillator.stop(audioCtx.currentTime+start+0.36);
+    };
+
+    playTone(660,0);
+    playTone(784,0.22);
+    playTone(988,0.44);
+
+    window.setTimeout(()=>void audioCtx.close(),1200);
+  }catch(error){
+    console.warn("No se pudo reproducir el sonido de enfoque.",error);
+  }
+}
 
 function reportToApi(report:Report):Informe{
   return {
@@ -328,12 +399,16 @@ function App(){
     }, 8000);
     return () => clearInterval(interval);
   }, []);
-// Guarda los datos localmente después de cargar la información de la cuenta.
 useEffect(() => {
-  if (!cloudReady || !authSession?.user?.id) return;
+  try {
+    localStorage.setItem(KEY, JSON.stringify(data));
+  } catch (error) {
+    console.error("Error al guardar los datos localmente:", error);
+    setToast("No se pudieron guardar los datos en este dispositivo.");
+  }
+}, [data]);
 
-  localStorage.setItem(KEY, JSON.stringify(data));
-}, [data, cloudReady, authSession?.user?.id]);
+
 
 // Carga los datos de la cuenta y los informes desde la nube.
 useEffect(() => {
@@ -448,6 +523,24 @@ useEffect(() => {
 }, [authPending, authSession?.user?.id]);
 
   const update=(patch:Partial<typeof data>)=>setData(d=>({...d,...patch}));
+  const removeSyncedRecord = (
+  collection: "events" | "talks" | "reminders" | "focusSessions" | "meetingSchedules" | "meetingPreparations" | "studyPlans" | "followUps",
+  id: string
+) => {
+  setData(current => {
+    const records = current[collection] as Array<{ id: string }>;
+    const deleted = current.deletedRecords[collection] ?? [];
+
+    return {
+      ...current,
+      [collection]: records.filter(record => record.id !== id),
+      deletedRecords: {
+        ...current.deletedRecords,
+        [collection]: deleted.includes(id) ? deleted : [...deleted, id],
+      },
+    };
+  });
+};
   const t = TRANSLATIONS[data.lang || 'es'];
 
   const events=data.events;
@@ -469,8 +562,11 @@ useEffect(() => {
 
   const openModal=(kind:NonNullable<typeof modal>,id?:string)=>{setEditing(id||null);setModal(kind);};
   const saveEvent=(form:EventItem)=>{update({events:editing?events.map(e=>e.id===editing?form:e):[...events,form]});setModal(null);setToast(translate("Actividad guardada"));};
-  const removeEvent=(id:string)=>{update({events:events.filter(e=>e.id!==id)});setToast(translate("Actividad eliminada"));};
-  const removeReport=async(id:string)=>{
+ const removeEvent=(id:string)=>{
+  removeSyncedRecord("events",id);
+  setToast(translate("Actividad eliminada"));
+};
+const removeReport=async(id:string)=>{
     try{
       if(/^\d+$/.test(id)) await eliminarInforme(Number(id));
       update({reports:data.reports.filter(report=>report.id!==id)});
@@ -501,29 +597,61 @@ useEffect(() => {
     setToast(translate("Documento guardado"));
   };
   const removeTalk=async(id:string)=>{
-    const talk=data.talks.find(item=>item.id===id);
-    if(!talk)return;
-    if(talk.attachments.length)await updateStoredAttachments([],talk.attachments.map(attachment=>attachment.id));
-    update({talks:data.talks.filter(item=>item.id!==id)});
-    setToast(translate("Documento y adjuntos eliminados"));
-  };
+  const talk=data.talks.find(item=>item.id===id);
+  if(!talk)return;
+  if(talk.attachments.length)await updateStoredAttachments([],talk.attachments.map(attachment=>attachment.id));
+  removeSyncedRecord("talks",id);
+  setToast(translate("Documento y adjuntos eliminados"));
+};
   const downloadTalkAttachment=async(attachment:TalkAttachment)=>{
     const stored=await readStoredAttachment(attachment.id);
     downloadBlob(stored.blob,stored.name);
   };
   const saveMeetingSchedule=(schedule:MeetingSchedule)=>{update({meetingSchedules:[...data.meetingSchedules,schedule]});setToast(translate("Horario semanal guardado"));};
-  const removeMeetingSchedule=(id:string)=>{update({meetingSchedules:data.meetingSchedules.filter(schedule=>schedule.id!==id)});setToast(translate("Horario eliminado"));};
+ const removeMeetingSchedule=(id:string)=>{
+  removeSyncedRecord("meetingSchedules",id);
+  setToast(translate("Horario eliminado"));
+};
   const saveMeetingPreparation=(preparation:MeetingPreparation)=>{update({meetingPreparations:[...data.meetingPreparations,preparation]});setToast(translate("Preparación guardada"));};
   const toggleMeetingPreparation=(id:string)=>update({meetingPreparations:data.meetingPreparations.map(item=>item.id===id?{...item,done:!item.done}:item)});
-  const removeMeetingPreparation=(id:string)=>{update({meetingPreparations:data.meetingPreparations.filter(item=>item.id!==id)});setToast(translate("Preparación eliminada"));};
+ const removeMeetingPreparation=(id:string)=>{
+  removeSyncedRecord("meetingPreparations",id);
+  setToast(translate("Preparación eliminada"));
+};
   const saveStudyPlan=(plan:StudyPlan)=>{update({studyPlans:[...data.studyPlans,plan]});setToast(translate("Plan de estudio guardado"));};
-  const removeStudyPlan=(id:string)=>{update({studyPlans:data.studyPlans.filter(plan=>plan.id!==id)});setToast(translate("Plan eliminado"));};
+ const removeStudyPlan=(id:string)=>{
+  removeSyncedRecord("studyPlans",id);
+  setToast(translate("Plan eliminado"));
+};
   const addStudyItem=(planId:string,item:StudyItem)=>update({studyPlans:data.studyPlans.map(plan=>plan.id===planId?{...plan,items:[...plan.items,item]}:plan)});
   const toggleStudyItem=(planId:string,itemId:string)=>update({studyPlans:data.studyPlans.map(plan=>plan.id===planId?{...plan,items:plan.items.map(item=>item.id===itemId?{...item,done:!item.done}:item)}:plan)});
-  const removeStudyItem=(planId:string,itemId:string)=>update({studyPlans:data.studyPlans.map(plan=>plan.id===planId?{...plan,items:plan.items.filter(item=>item.id!==itemId)}:plan)});
+ const removeStudyItem=(planId:string,itemId:string)=>{
+  const deletedId=`${planId}:${itemId}`;
+
+  setData(current=>({
+    ...current,
+    studyPlans:current.studyPlans.map(plan=>
+      plan.id===planId
+        ? {...plan,items:plan.items.filter(item=>item.id!==itemId)}
+        : plan
+    ),
+    deletedRecords:{
+      ...current.deletedRecords,
+      studyPlanItems:[
+        ...new Set([
+          ...(current.deletedRecords.studyPlanItems??[]),
+          deletedId
+        ])
+      ]
+    }
+  }));
+};
   const saveFollowUp=(followUp:FollowUp)=>{update({followUps:[...data.followUps,followUp]});setToast(translate("Seguimiento guardado"));};
   const toggleFollowUp=(id:string)=>update({followUps:data.followUps.map(item=>item.id===id?{...item,done:!item.done}:item)});
-  const removeFollowUp=(id:string)=>{update({followUps:data.followUps.filter(item=>item.id!==id)});setToast(translate("Seguimiento eliminado"));};
+ const removeFollowUp=(id:string)=>{
+  removeSyncedRecord("followUps",id);
+  setToast(translate("Seguimiento eliminado"));
+};
 
   const saveReminder=(form:Reminder)=>{
     update({reminders:editing?data.reminders.map(r=>r.id===editing?form:r):[...data.reminders,form]});
@@ -534,8 +662,38 @@ useEffect(() => {
     if (delay > 0) scheduleNotification(form.title, form.time, delay);
   };
 
-  const saveFocusSession=(seconds:number,label:string)=>{const session={id:uid(),date:today(),label,seconds};setData(current=>({...current,focusSessions:[...current.focusSessions,session]}));setToast(`${translate("Sesión guardada")}: ${translate(label)} · ${formatDuration(seconds)}`);};
-  const removeFocusSession=(id:string)=>{setData(current=>({...current,focusSessions:current.focusSessions.filter(session=>session.id!==id)}));setToast(translate("Sesión eliminada"));};
+  const saveFocusSession=(
+  seconds:number,
+  label:string,
+  details?:{
+    mode?:"focus"|"shortBreak"|"longBreak";
+    goal?:string;
+    startedAt?:string;
+    completedAt?:string;
+  }
+)=>{
+  const session:FocusSession={
+    id:uid(),
+    date:today(),
+    label,
+    seconds,
+    mode:details?.mode??"focus",
+    goal:details?.goal??"",
+    startedAt:details?.startedAt??new Date(Date.now()-seconds*1000).toISOString(),
+    completedAt:details?.completedAt??new Date().toISOString()
+  };
+
+  setData(current=>({
+    ...current,
+    focusSessions:[...current.focusSessions,session]
+  }));
+
+  setToast(`${translate("Sesión guardada")}: ${translate(label)} · ${formatDuration(seconds)}`);
+};
+ const removeFocusSession=(id:string)=>{
+  removeSyncedRecord("focusSessions",id);
+  setToast(translate("Sesión eliminada"));
+};
   const exportData=()=>{const backup={...data,talks:data.talks.map(({attachments:_attachments,...talk})=>talk)};downloadBlob(new Blob([JSON.stringify(backup,null,2)],{type:"application/json"}),"jw-tracker-backup.json");};
   const importData=async(backup:typeof emptyState)=>{
     if(!window.confirm(translate("Importar esta copia reemplazará los datos generales actuales de la aplicación. Los informes se gestionan por separado y los adjuntos locales actuales se eliminarán. ¿Deseas continuar?")))return false;
@@ -650,7 +808,7 @@ useEffect(() => {
       <div className="nav-label">{translate("ESPACIO PERSONAL")}</div>
       <nav aria-label={translate("Navegación principal")}>{nav.map(n=><button key={n.name} className={`nav-item ${page===n.name?"active":""}`} aria-current={page===n.name?"page":undefined} onClick={()=>setPage(n.name)}><n.icon size={18}/><span>{translate(n.name)}</span>{n.name==="Recordatorios"&&data.reminders.filter(r=>r.enabled).length>0&&<i/>}</button>)}</nav>
       <div className="sidebar-bottom">
-        <div className="profile-chip"><button className="profile-chip-main" onClick={()=>setPage("Perfil")} aria-label={translate("Abrir perfil")}><div className="avatar"><UserRound size={17}/></div><div className="profile-copy"><b>{data.profile.name||translate("Mi espacio")}</b><small>{data.profile.congregation||translate("Añadir congregación")}</small></div></button><button className="profile-settings-button" onClick={()=>setPage("Ajustes")} aria-label={translate("Abrir ajustes")}><MoreHorizontal size={17}/></button></div>
+        <div className="profile-chip"><button className="profile-chip-main" onClick={()=>setPage("Perfil")} aria-label={translate("Abrir perfil")}><div className="avatar"><CircleUserRound size={19} strokeWidth={1.8}/></div><div className="profile-copy"><b>{data.profile.name||translate("Mi espacio")}</b><small>{data.profile.congregation||translate("Añadir congregación")}</small></div></button><button className="profile-settings-button" onClick={()=>setPage("Ajustes")} aria-label={translate("Abrir ajustes")}><MoreHorizontal size={17}/></button></div>
         <div className="local-note"><span className="status-dot"/> {translate("Informes en la nube · resto en este dispositivo")}</div><button className="text-button" type="button" onClick={()=>{void authClient.signOut();}}>{translate("Cerrar sesión")}</button>
       </div>
     </aside>
@@ -722,15 +880,20 @@ useEffect(() => {
 )}
 
     <main className="main" id="main-content" tabIndex={-1}>
-      <div className="topline"><div className="breadcrumb">{translate("Mi espacio")}{" "}<span>/</span> {translate(page)}</div><div className="top-actions"><span className="today-pill"><span className="status-dot"/>{dateLabel(today(),{day:"numeric",month:"short"})}</span><button className="icon-button" title={translate("Ajustes")} aria-label={translate("Abrir ajustes")} onClick={()=>setPage("Ajustes")}><Settings size={18}/></button><button className="avatar small" onClick={()=>setPage("Perfil")} aria-label={translate("Abrir perfil")}><UserRound size={15}/></button></div></div>
+      <div className="topline"><div className="breadcrumb">
+  <LayoutGrid size={15} strokeWidth={1.9}/>
+  {translate("Mi espacio")}
+  <span>/</span>
+  {translate(page)}
+</div><div className="top-actions"><span className="today-pill"><span className="status-dot"/>{dateLabel(today(),{day:"numeric",month:"short"})}</span><button className="icon-button" title={translate("Ajustes")} aria-label={translate("Abrir ajustes")} onClick={()=>setPage("Ajustes")}><Settings size={18}/></button><button className="avatar small" onClick={()=>setPage("Perfil")} aria-label={translate("Abrir perfil")}><CircleUserRound size={17} strokeWidth={1.8}/></button></div></div>
       <AnimatePresence mode="wait"><motion.div key={page} initial={{opacity:0,y:9}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-5}} transition={{duration:.2}}>
         {page==="Inicio"&&<Dashboard name={data.profile.name} events={todaysEvents} next={activeEvents} service={serviceMinutes} credit={creditMinutes} routines={data.routineDone} streak={currentStreak} weeklyFocusSessions={weeklyFocusSessions} weeklyFocusPercent={weeklyFocusPercent} todayFocusSeconds={todayFocusSeconds} weeklyStudySeconds={weeklyStudySeconds} goals={data.goals} monthlyServiceGoalProgress={monthlyServiceGoalProgress} weeklyStudyGoalProgress={weeklyStudyGoalProgress} setPage={setPage} add={()=>openModal("event")} verse={BIBLE_VERSES[verseIndex]} onBibleReference={setActiveBibleReference} t={t}/>}
         {page==="Calendario"&&<CalendarPage month={month} setMonth={setMonth} selected={selectedDate} setSelected={setSelectedDate} events={monthEvents} add={()=>openModal("event")} edit={(id:string)=>openModal("event",id)} remove={removeEvent} />}
         {page==="Rutinas"&&<Routines done={data.routineDone} streak={routineStreak} toggle={(key:string)=>update({routineDone:{...data.routineDone,[today()+":"+key]:!data.routineDone[today()+":"+key]}})} />}
-        {page==="Enfoque"&&<FocusPage sessions={data.focusSessions} onSave={saveFocusSession} onRemove={removeFocusSession}/>}
+        {page==="Enfoque"&&<FocusPage sessions={data.focusSessions} onSave={saveFocusSession} onRemove={removeFocusSession} sound={data.sound}/>}
         {page==="Servicio"&&<ServicePage reports={data.reports} save={()=>openModal("report")} edit={(id:string)=>openModal("report",id)} remove={removeReport} service={serviceMinutes} credit={creditMinutes} exportSummary={exportMonthlySummary}/>}
         {page==="Discursos"&&<TalksPage talks={data.talks} add={()=>openModal("talk")} edit={(id:string)=>openModal("talk",id)} remove={removeTalk} downloadAttachment={downloadTalkAttachment} onBibleReference={(reference:string)=>{setActiveBibleReference(reference);setBiblePanelMinimized(false);}}/>}
-        {page==="Recordatorios"&&<RemindersPage reminders={data.reminders} add={()=>openModal("reminder")} edit={(id:string)=>openModal("reminder",id)} toggle={(id:string)=>update({reminders:data.reminders.map(r=>r.id===id?{...r,enabled:!r.enabled}:r)})} remove={(id:string)=>update({reminders:data.reminders.filter(r=>r.id!==id)})}/>}
+        {page==="Recordatorios"&&<RemindersPage reminders={data.reminders} add={()=>openModal("reminder")} edit={(id:string)=>openModal("reminder",id)} toggle={(id:string)=>update({reminders:data.reminders.map(r=>r.id===id?{...r,enabled:!r.enabled}:r)})} remove={(id:string)=>removeSyncedRecord("reminders",id)}/>}
         {page==="Reuniones"&&<MeetingsPage schedules={data.meetingSchedules} preparations={data.meetingPreparations} saveSchedule={saveMeetingSchedule} removeSchedule={removeMeetingSchedule} savePreparation={saveMeetingPreparation} togglePreparation={toggleMeetingPreparation} removePreparation={removeMeetingPreparation}/>}
         {page==="Estudio"&&<StudyPage plans={data.studyPlans} savePlan={saveStudyPlan} removePlan={removeStudyPlan} addItem={addStudyItem} toggleItem={toggleStudyItem} removeItem={removeStudyItem}/>}
         {page==="Seguimiento"&&<FollowUpsPage items={data.followUps} save={saveFollowUp} toggle={toggleFollowUp} remove={removeFollowUp}/>}
@@ -954,6 +1117,9 @@ function FollowUpsPage({items,save,toggle,remove}:any){
 
 function Routines({done,toggle,streak}:{done:Record<string,boolean>;toggle:(key:string)=>void;streak:number}){
  const count=routineCountForDay(done,today());
+ const progress = routineList.length
+  ? Math.round((count / routineList.length) * 100)
+  : 0;
  const history=Array.from({length:7},(_,index)=>{const date=new Date(today()+"T12:00:00");date.setDate(date.getDate()-6+index);const key=dateKey(date);return {key,count:routineCountForDay(done,key),label:new Intl.DateTimeFormat(getLocale(),{weekday:"short"}).format(date),day:date.getDate(),isToday:key===today()};});
  return <>
   <PageHeading eyebrow={translate("HÁBITOS Y CONSTANCIA")} title={translate("Rutinas espirituales")} desc={translate("Marca las actividades que has completado hoy y revisa tu constancia de los últimos siete días.")}/>
@@ -961,13 +1127,96 @@ function Routines({done,toggle,streak}:{done:Record<string,boolean>;toggle:(key:
    <section className="panel routine-streak-card"><div className="quick-icon"><Flame size={19}/></div><div><div className="eyebrow">{translate("RACHA DE RUTINAS")}</div><strong>{streak} {translate(streak===1?"día":"días")}</strong><small>{translate("Con al menos una rutina completada al día")}</small></div></section>
    <section className="panel routine-week-card"><div className="panel-head"><div><div className="eyebrow">{translate("CONSTANCIA")}</div><h3>{translate("Últimos 7 días")}</h3></div><CalendarDays size={19}/></div><div className="routine-week-days">{history.map(day=><div className={`routine-day ${day.count===routineList.length?"complete":day.count>0?"partial":""} ${day.isToday?"today":""}`} key={day.key} aria-label={`${day.label} ${day.day}: ${day.count} ${translate("de")} ${routineList.length} ${translate("rutinas")}`}><span>{day.label}</span><b>{day.day}</b><i>{day.count}</i></div>)}</div></section>
   </div>
-  <section className="panel routine-panel"><div className="routine-progress"><div><span>{translate("PROGRESO DE HOY")}</span><b>{count} {translate("de")}{" "}{routineList.length}</b></div><div className="progress-track"><i style={{width:`${count/routineList.length*100}%`}}/></div></div>{routineList.map((routine,index)=>{const checked=!!done[today()+":"+routine];const icons=[Sparkles,BookOpenText,GraduationCap,BookMarked,Users,Leaf];const Icon=icons[index];return <button key={routine} className={`routine-row ${checked?"completed":""}`} aria-pressed={checked} onClick={()=>toggle(routine)}><span className="routine-icon"><Icon size={19}/></span><span className="routine-copy"><b>{translate(routine)}</b><small>{translate(["Dedica un momento al texto diario","Avanza en tu lectura de las Escrituras","Reserva tiempo para el estudio personal","Prepara el estudio de La Atalaya","Repasa el programa de la reunión","Organiza tu participación en el ministerio"][index])}</small></span><span className="check-circle">{checked&&<Check size={16}/>}</span></button>})}</section>
+  <section className="panel routine-panel"><div className="routine-progress">
+  <div className="routine-progress-header">
+    <div>
+      <span className="eyebrow">{translate("PROGRESO DE HOY")}</span>
+      <h3>{translate("Tu constancia diaria")}</h3>
+      <p>{count} {translate("de")} {routineList.length} {translate("rutinas completadas")}</p>
+    </div>
+
+    <div
+      className="routine-progress-ring"
+      style={{ "--progress": `${progress}%` } as React.CSSProperties}
+      role="progressbar"
+      aria-valuenow={progress}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-label={`${progress}%`}
+    >
+      <div className="routine-progress-ring-inner">
+        <strong>{progress}%</strong>
+        <span>{translate("HOY")}</span>
+      </div>
+    </div>
+  </div>
+
+  <div className="routine-progress-track">
+    <i style={{ width: `${progress}%` }} />
+  </div>
+</div>{routineList.map((routine,index)=>{const checked=!!done[today()+":"+routine];const icons=[BookOpen,BookOpenText,GraduationCap,BookMarked,Users,Leaf];const Icon=icons[index];return <button key={routine} className={`routine-row ${checked?"completed":""}`} aria-pressed={checked} onClick={()=>toggle(routine)}><span className="routine-icon"><Icon size={19}/></span><span className="routine-copy"><b>{translate(routine)}</b><small>{translate(["Dedica un momento al texto diario","Avanza en tu lectura de las Escrituras","Reserva tiempo para el estudio personal","Prepara el estudio de La Atalaya","Repasa el programa de la reunión","Organiza tu participación en el ministerio"][index])}</small></span><span className="check-circle">{checked&&<Check size={16}/>}</span></button>})}</section>
  </>;
 }
 
-function FocusPage({sessions,onSave,onRemove}:any){
+function FocusPage({sessions,onSave,onRemove,sound}:any){
  const [duration,setDuration]=useState(25);
  const [remaining,setRemaining]=useState(1500);
+ const [endTime,setEndTime]=useState<number|null>(null);
+const [startedAt,setStartedAt]=useState<string|null>(null);
+const [goal,setGoal]=useState("");
+const [mode,setMode]=useState<"focus"|"shortBreak"|"longBreak">("focus");
+const [completion,setCompletion]=useState<{
+  label:string;
+  message:string;
+  seconds:number;
+  completed:boolean;
+}|null>(null);
+
+const completionMessages:Record<string,string[]> = {
+  "Estudio personal":[
+    "Has dedicado tiempo valioso a profundizar en tu conocimiento de las Escrituras. Sigue cultivando tu amistad con Jehová.",
+    "Cada momento de estudio puede ayudarte a fortalecer tu fe. Mantén ese excelente hábito.",
+    "El conocimiento adquirido hoy puede ayudarte a tomar mejores decisiones mañana. ¡Sigue adelante!"
+  ],
+  "Lectura bíblica":[
+    "Has reservado un momento para leer la Palabra de Dios. Continúa haciendo de la lectura bíblica una parte valiosa de tu día.",
+    "Cada lectura te ofrece nuevas oportunidades para meditar y encontrar enseñanzas prácticas.",
+    "Sigue dedicando tiempo a las Escrituras. La constancia hace la diferencia."
+  ],
+  "Preparación de La Atalaya":[
+    "Tu preparación te ayudará a aprovechar mejor el estudio de La Atalaya y participar con mayor confianza.",
+    "Has dedicado tiempo a prepararte para el estudio congregacional. ¡Continúa con esa buena costumbre!",
+    "Prepararse con anticipación permite meditar mejor en las enseñanzas y aplicaciones."
+  ],
+  "Preparación de reunión semanal":[
+    "Tu preparación contribuye a que aproveches mejor las reuniones y participes con confianza.",
+    "Has dado un paso importante para llegar preparado a la reunión. ¡Sigue así!",
+    "La preparación anticipada te permite aprovechar mejor cada enseñanza."
+  ],
+  "Preparación de discurso":[
+    "Cada sesión de preparación te ayuda a mejorar tu capacidad para enseñar con claridad y convicción.",
+    "Continúa trabajando en la organización de tus ideas y en la aplicación de los textos bíblicos.",
+    "El esfuerzo que dedicas a preparar tu discurso merece reconocimiento. ¡Sigue progresando!"
+  ],
+  "Estudio de publicaciones":[
+    "Has dedicado tiempo a ampliar tus conocimientos. Sigue aprendiendo y reflexionando sobre lo que lees.",
+    "Cada momento de estudio puede aportar ideas valiosas para tu vida y tu ministerio.",
+    "La constancia en el aprendizaje es una excelente inversión de tiempo."
+  ]
+};
+
+const showCompletion=(completed:boolean,seconds:number)=>{
+  const messages=completionMessages[label]??[
+    "Has dedicado tiempo a una actividad valiosa. ¡Continúa cultivando buenos hábitos!"
+  ];
+
+  setCompletion({
+    label,
+    message:messages[Math.floor(Math.random()*messages.length)],
+    seconds,
+    completed
+  });
+};
  const [running,setRunning]=useState(false);
  const [label,setLabel]=useState("Estudio personal");
  const [isOpen, setIsOpen] = useState(false);
@@ -977,18 +1226,92 @@ function FocusPage({sessions,onSave,onRemove}:any){
  const history=[...sessions].reverse().slice(0,8);
  const elapsedSeconds=duration*60-remaining;
  useEffect(()=>{
-  if(!running)return;
-  const id=setInterval(()=>setRemaining(value=>Math.max(0,value-1)),1000);
-  return()=>clearInterval(id);
- },[running]);
- useEffect(()=>{
+  if(!running||endTime===null)return;
+
+  const updateTimer=()=>{
+    const nextRemaining=Math.max(
+      0,
+      Math.ceil((endTime-Date.now())/1000)
+    );
+
+    setRemaining(nextRemaining);
+
+    
+  };
+
+  updateTimer();
+
+  const id=window.setInterval(updateTimer,250);
+
+  return()=>window.clearInterval(id);
+},[running,endTime]);
+
+useEffect(()=>{
   if(!running||remaining!==0)return;
+
   setRunning(false);
-  onSave(duration*60,label);
+  setEndTime(null);
+
+  showCompletion(true,duration*60);
+if(sound)playFocusCompletionSound();
+
+  onSave(duration*60,label,{
+    mode,
+    goal,
+    startedAt:startedAt??undefined,
+    completedAt:new Date().toISOString()
+  });
+
+  setStartedAt(null);
   setRemaining(duration*60);
- },[remaining,running,duration,label,onSave]);
- const reset=(minutes=duration)=>{setRunning(false);setDuration(minutes);setRemaining(minutes*60)};
- const finishSession=()=>{if(elapsedSeconds<=0)return;setRunning(false);onSave(elapsedSeconds,label);setRemaining(duration*60)};
+},[remaining,running,duration,label,onSave,mode,goal,startedAt,sound]);
+
+const reset=(minutes=duration)=>{
+  setRunning(false);
+  setEndTime(null);
+  setStartedAt(null);
+  setDuration(minutes);
+  setRemaining(minutes*60);
+};
+
+const finishSession=()=>{
+  if(elapsedSeconds<=0)return;
+
+  setRunning(false);
+  setEndTime(null);
+
+  showCompletion(false,elapsedSeconds);
+  onSave(elapsedSeconds,label,{
+    mode,
+    goal,
+    startedAt:startedAt??undefined,
+    completedAt:new Date().toISOString()
+  });
+
+  setStartedAt(null);
+  setRemaining(duration*60);
+};
+const toggleTimer=()=>{
+  if(running){
+    const nextRemaining=endTime===null
+      ?remaining
+      :Math.max(0,Math.ceil((endTime-Date.now())/1000));
+
+    setRemaining(nextRemaining);
+    setRunning(false);
+    setEndTime(null);
+    return;
+  }
+
+  if(remaining<=0)return;
+
+  if(!startedAt){
+    setStartedAt(new Date().toISOString());
+  }
+
+  setEndTime(Date.now()+remaining*1000);
+  setRunning(true);
+};
  const fmt=(seconds:number)=>`${String(Math.floor(seconds/60)).padStart(2,"0")}:${String(seconds%60).padStart(2,"0")}`;
  const progress=(duration*60-remaining)/(duration*60)*100;
  return <>
@@ -1030,7 +1353,8 @@ function FocusPage({sessions,onSave,onRemove}:any){
     </div>
     <div className="timer-ring" style={{"--progress":`${progress}%`} as React.CSSProperties}><div><strong>{fmt(remaining)}</strong><small>{translate(running?"MANTÉN EL ENFOQUE":"TIEMPO DISPONIBLE")}</small></div></div>
     <div className="timer-controls">
-     <button className="button primary" onClick={()=>setRunning(!running)}>{running?<Pause size={17}/>:<Play size={17}/>} {translate(running?"Pausar":elapsedSeconds?"Reanudar":"Comenzar")}</button>
+     <button className="button primary" 
+     onClick={toggleTimer}>{running?<Pause size={17}/>:<Play size={17}/>} {translate(running?"Pausar":elapsedSeconds?"Reanudar":"Comenzar")}</button>
      {elapsedSeconds>0&&<button className="button secondary" onClick={finishSession}><Check size={16}/> {translate("Guardar tiempo")}</button>}
      <button className="button secondary" onClick={()=>reset()}><RotateCcw size={16}/> {translate("Reiniciar")}</button>
     </div>
@@ -1041,9 +1365,114 @@ function FocusPage({sessions,onSave,onRemove}:any){
   <section className="panel focus-history">
    <div className="panel-head"><div><div className="eyebrow">{translate("SEGUIMIENTO PERSONAL")}</div><h3>{translate("Historial de enfoque")}</h3></div><div className="focus-total"><span>{translate("Hoy")}</span><strong>{formatDuration(todaySeconds)}</strong></div></div>
    {history.length?history.map((session:any)=><div className="focus-session-row" key={session.id}><span className="focus-session-icon"><Timer size={17}/></span><div className="event-info"><b>{translate(session.label)}</b><small>{session.date===today()?translate("Hoy"):dateLabel(session.date,{weekday:"short",day:"numeric",month:"short"})}</small></div><strong>{formatDuration(session.seconds)}</strong><button className="icon-button danger" onClick={()=>onRemove(session.id)} aria-label={translate("Eliminar sesión")}><Trash2 size={15}/></button></div>):<Empty icon={History} title={translate("Aún no hay sesiones guardadas")} text={translate("Completa una sesión para empezar tu historial de enfoque.")}/>}
+  
   </section>
+
+  {/* Ventana animada de finalización */}
+  <AnimatePresence>
+    {completion && (
+      <motion.div
+        className="focus-completion-backdrop"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        onClick={() => setCompletion(null)}
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 9999,
+          display: "grid",
+          placeItems: "center",
+          padding: 20,
+          background: "rgba(5,10,20,0.72)",
+          backdropFilter: "blur(12px)"
+        }}
+      >
+        <motion.div
+          className="panel glass-panel"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="focus-completion-title"
+          onClick={(event) => event.stopPropagation()}
+          initial={{ opacity: 0, y: 25, scale: 0.94 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 15, scale: 0.97 }}
+          transition={{ type: "spring", stiffness: 260, damping: 24 }}
+          style={{
+            width: "100%",
+            maxWidth: 430,
+            padding: 30,
+            textAlign: "center"
+          }}
+        >
+          <motion.div
+            initial={{ scale: 0.5, rotate: -15 }}
+            animate={{ scale: 1, rotate: 0 }}
+            transition={{ delay: 0.12, type: "spring", stiffness: 220 }}
+            className="quick-icon large"
+            style={{ margin: "0 auto 18px" }}
+          >
+            {completion.completed
+              ? <Check size={30} />
+              : <Sparkles size={30} />}
+          </motion.div>
+
+          <div className="eyebrow">
+            {translate(
+              completion.completed
+                ? "SESIÓN COMPLETADA"
+                : "TIEMPO REGISTRADO"
+            )}
+          </div>
+
+          <h2 id="focus-completion-title" style={{ margin: "10px 0" }}>
+            {translate(
+              completion.completed
+                ? "¡Excelente trabajo!"
+                : "¡Buen trabajo!"
+            )}
+          </h2>
+
+          <p style={{ opacity: 0.8 }}>
+            {translate(completion.label)}
+          </p>
+
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+            style={{
+              fontSize: 38,
+              fontWeight: 800,
+              margin: "20px 0"
+            }}
+          >
+            {formatDuration(completion.seconds)}
+          </motion.div>
+
+          <p style={{ lineHeight: 1.7 }}>
+            {completion.message}
+          </p>
+
+          <button
+            className="button primary"
+            style={{
+              width: "100%",
+              justifyContent: "center",
+              marginTop: 20
+            }}
+            onClick={() => setCompletion(null)}
+          >
+            <Check size={17} />
+            {translate("Continuar")}
+          </button>
+        </motion.div>
+      </motion.div>
+    )}
+  </AnimatePresence>
  </>;
 }
+
 
 function ServicePage({reports,save,edit,remove,service,credit,exportSummary}:any){
  const rows=[...reports].sort((a:any,b:any)=>b.date.localeCompare(a.date));
@@ -1052,35 +1481,251 @@ function ServicePage({reports,save,edit,remove,service,credit,exportSummary}:any
  return <><PageHeading eyebrow={translate("REGISTRO PERSONAL")} title={translate("Informe de servicio")} desc={translate("Registra cada salida y consulta un resumen mensual listo para compartir o archivar.")} action={<div className="heading-actions"><button className="button secondary" onClick={exportSummary}><Download size={16}/> {translate("Resumen mensual")}</button><button className="button primary" onClick={save}><Plus size={17}/> {translate("Añadir registro")}</button></div>}/><div className="stats-grid two service-stats"><StatCard icon={Clock3} label={translate("Tiempo de predicación")} value={`${Math.floor(service/60)}h ${service%60}m`} detail={translate("Total del mes actual")}/><StatCard icon={Sprout} label={translate("Horas de crédito")} value={`${Math.floor(credit/60)}h ${credit%60}m`} detail={translate("Separadas del tiempo de predicación")}/><StatCard icon={BookOpenText} label={translate("Cursos bíblicos")} value={courses} detail={translate("Registrados este mes")}/><StatCard icon={CalendarDays} label={translate("Registros del mes")} value={currentMonth.length} detail={translate("Salidas registradas")}/></div><section className="panel"><div className="panel-head"><div><div className="eyebrow">{translate("HISTORIAL")}</div><h3>{translate("Registros de actividad")}</h3></div><span className="count-pill">{rows.length} {translate("registros")}</span></div>{rows.length?rows.map((report:any)=><div className="report-row" key={report.id}> <div className="date-tile"><b>{new Date(report.date+"T12:00:00").getDate()}</b><small>{new Intl.DateTimeFormat(getLocale(),{month:"short"}).format(new Date(report.date+"T12:00:00"))}</small></div><div className="report-details"><b>{report.hours}{translate("h")}{" "}{report.minutes}{translate("m de predicación")}</b><small>{report.studies} {translate("cursos bíblicos ·")}{" "}{report.publications} {translate("publicaciones ·")}{" "}{report.videos} {translate("videos")}</small><small>{translate("Crédito:")}{" "}{report.creditHours}{translate("h")}{" "}{report.creditMinutes}{translate("m")}</small>{(report.location||report.companion)&&<small className="report-context">{[report.location&&`${translate("Lugar:")} ${report.location}`,report.companion&&`${translate("Acompañante:")} ${report.companion}`].filter(Boolean).join(" · ")}</small>}</div><button className="icon-button" onClick={()=>edit(report.id)} aria-label={translate("Editar registro")}><Pencil size={15}/></button><button className="icon-button danger" onClick={()=>remove(report.id)} aria-label={translate("Eliminar registro")}><Trash2 size={15}/></button></div>):<Empty icon={ChartNoAxesColumn} title={translate("Todavía no hay registros")} text={translate("Añade tu primera actividad para empezar el historial mensual.")}/>}</section><p className="subtle-note">{translate("Este registro es personal y flexible. No sustituye los procedimientos oficiales de informe de tu congregación.")}</p></>;
 }
 
+
 function TalksPage({talks,add,edit,remove,downloadAttachment,onBibleReference}:any){
  const [query,setQuery]=useState("");
  const [filter,setFilter]=useState("Todos");
  const [error,setError]=useState("");
+ const [readerId,setReaderId]=useState<string|null>(null);
+
  const filters=["Todos","Tema","Texto","Discurso"];
+ const readerTalk=talks.find((talk:Talk)=>talk.id===readerId) || null;
+
  const visibleTalks=useMemo(()=>{
   const search=normalizeText(query.trim());
   return talks.filter((talk:any)=>{
-   const matchesSearch=!search||normalizeText([talk.title,talk.content,talk.topic||"",talk.texts||"",talk.kind,...(talk.tags||[])].join(" ")).includes(search);
-   const matchesFilter=filter==="Todos"||(filter==="Tema"&&!!talk.topic?.trim())||(filter==="Texto"&&!!talk.texts?.trim())||(filter==="Discurso"&&(talk.kind==="Discurso"||talk.tags?.some((tag:any)=>normalizeText(tag)==="discurso")));
+   const matchesSearch=!search||normalizeText([
+    talk.title,talk.content,talk.topic||"",talk.texts||"",talk.kind,...(talk.tags||[])
+   ].join(" ")).includes(search);
+
+   const matchesFilter=filter==="Todos"||
+    (filter==="Tema"&&!!talk.topic?.trim())||
+    (filter==="Texto"&&!!talk.texts?.trim())||
+    (filter==="Discurso"&&(talk.kind==="Discurso"||talk.tags?.some((tag:any)=>normalizeText(tag)==="discurso")));
+
    return matchesSearch&&matchesFilter;
   });
  },[talks,query,filter]);
- const handleDownload=async(attachment:TalkAttachment)=>{setError("");try{await downloadAttachment(attachment);}catch(reason){setError(reason instanceof Error?translate(reason.message):translate("No se pudo descargar el adjunto."));}};
- const handleRemove=async(id:string)=>{setError("");try{await remove(id);}catch(reason){setError(reason instanceof Error?translate(reason.message):translate("No se pudo eliminar el documento y sus adjuntos."));}};
+
+ const handleDownload=async(attachment:TalkAttachment)=>{
+  setError("");
+  try{
+   await downloadAttachment(attachment);
+  }catch(reason){
+   setError(reason instanceof Error?translate(reason.message):translate("No se pudo descargar el adjunto."));
+  }
+ };
+
+ const handleRemove=async(id:string)=>{
+  setError("");
+  try{
+   await remove(id);
+  }catch(reason){
+   setError(reason instanceof Error?translate(reason.message):translate("No se pudo eliminar el documento y sus adjuntos."));
+  }
+ };
+
  return <>
-  <PageHeading eyebrow={translate("PREPARACIÓN Y NOTAS")} title={translate("Biblioteca de discursos")} desc={translate("Organiza discursos y participaciones con temas, textos y etiquetas fáciles de encontrar.")} action={<button className="button primary" onClick={add}><Plus size={17}/> {translate("Nuevo documento")}</button>}/>
-  <section className="panel library-tools"><label className="search-field"><Search size={17}/><input aria-label={translate("Buscar en la biblioteca")} value={query} onChange={event=>setQuery(event.target.value)} placeholder={translate("Buscar por título, tema, texto o etiqueta")}/></label><div className="library-filter-row"><div className="library-filters">{filters.map(item=><button key={item} className={filter===item?"active":""} aria-pressed={filter===item} onClick={()=>setFilter(item)}>{translate(item)}</button>)}</div><span className="count-pill">{visibleTalks.length} {translate(visibleTalks.length===1?"documento":"documentos")}</span></div></section>
+  <PageHeading
+   eyebrow={translate("PREPARACIÓN Y NOTAS")}
+   title={translate("Biblioteca de discursos")}
+   desc={translate("Organiza discursos y participaciones con temas, textos y etiquetas fáciles de encontrar.")}
+   action={<button className="button primary" onClick={add}><Plus size={17}/> {translate("Nuevo documento")}</button>}
+  />
+
+  <section className="panel library-tools">
+   <label className="search-field">
+    <Search size={17}/>
+    <input aria-label={translate("Buscar en la biblioteca")} value={query} onChange={event=>setQuery(event.target.value)} placeholder={translate("Buscar por título, tema, texto o etiqueta")}/>
+   </label>
+   <div className="library-filter-row">
+    <div className="library-filters">
+     {filters.map(item=><button key={item} className={filter===item?"active":""} aria-pressed={filter===item} onClick={()=>setFilter(item)}>{translate(item)}</button>)}
+    </div>
+    <span className="count-pill">{visibleTalks.length} {translate(visibleTalks.length===1?"documento":"documentos")}</span>
+   </div>
+  </section>
+
   {error&&<p className="backup-error" role="alert">{error}</p>}
-  {visibleTalks.length?<div className="talk-grid">{visibleTalks.map((talk:Talk)=><article className="talk-card" key={talk.id}>
-   <div className="talk-card-top"><span className="file-icon"><FileText size={20}/></span><span className={`status-tag ${talk.status.toLowerCase()}`}>{translate(talk.status)}</span></div>
-   <h3>{talk.title}</h3><p>{translate(talk.kind)} {talk.date?`· ${dateLabel(talk.date,{day:"numeric",month:"short"})}`:""}</p>
-   {(talk.topic||talk.texts||(talk.tags?.length??0)>0)&&<div className="talk-tags">{talk.topic&&<span><Tag size={12}/> {translate("Tema:")}{" "}{talk.topic}</span>}{talk.texts&&<span><BookOpenText size={12}/> {talk.texts}</span>}{talk.tags?.map(tag=><span key={tag}><Tag size={12}/>{tag}</span>)}</div>}
-   <div className="talk-preview">{talk.content.slice(0,160)||translate("Sin contenido todavía.")}</div>
-   <BibleReferenceButtons value={`${talk.content} ${talk.texts||""}`} onSelect={onBibleReference}/>
-   {!!talk.attachments.length&&<div className="talk-attachments"><b>{translate("Adjuntos ·")}{" "}{talk.attachments.length}{translate("/")}{MAX_TALK_ATTACHMENTS}</b>{talk.attachments.map(attachment=><div className="talk-attachment-row" key={attachment.id}><span><FileText size={14}/>{attachment.name}<small>{formatFileSize(attachment.size)}</small></span><button className="icon-button" onClick={()=>handleDownload(attachment)} aria-label={`${translate("Descargar")} ${attachment.name}`}><Download size={15}/></button></div>)}</div>}
-   <div className="talk-actions"><button className="button secondary small" onClick={()=>edit(talk.id)}><Pencil size={14}/> {translate("Abrir y editar")}</button><button className="icon-button danger" onClick={()=>handleRemove(talk.id)} aria-label={`${translate("Eliminar ")}${talk.title} ${translate("y sus adjuntos")}`}><Trash2 size={15}/></button></div>
-  </article>)}</div>:<section className="panel"><Empty icon={BookOpenText} title={translate(talks.length?"No hay coincidencias":"Tu biblioteca está vacía")} text={translate(talks.length?"Prueba con otra búsqueda o cambia el filtro.":"Crea un documento y añade temas, textos y etiquetas para encontrarlo fácilmente.")}/></section>}
+
+  {visibleTalks.length?
+   <div className="talk-grid">
+    {visibleTalks.map((talk:Talk)=><article className="talk-card" key={talk.id}>
+     <div className="talk-card-top">
+      <span className="file-icon"><FileText size={20}/></span>
+      <span className={`status-tag ${talk.status.toLowerCase()}`}>{translate(talk.status)}</span>
+     </div>
+
+     <h3>{talk.title}</h3>
+     <p>{translate(talk.kind)} {talk.date?` · ${dateLabel(talk.date,{day:"numeric",month:"short"})}`:""}</p>
+
+     {(talk.topic||talk.texts||(talk.tags?.length??0)>0)&&
+      <div className="talk-tags">
+       {talk.topic&&<span><Tag size={12}/> {translate("Tema:")} {talk.topic}</span>}
+       {talk.texts&&<span><BookOpenText size={12}/> {talk.texts}</span>}
+       {talk.tags?.map(tag=><span key={tag}><Tag size={12}/>{tag}</span>)}
+      </div>
+     }
+
+     <div className="talk-preview">
+      {String(talk.content||"").slice(0,180)||translate("Sin contenido todavía.")}
+     </div>
+
+     <BibleReferenceButtons value={`${talk.content||""} ${talk.texts||""}`} onSelect={onBibleReference}/>
+
+     {!!talk.attachments?.length&&
+      <div className="talk-attachments">
+       <b>{translate("Adjuntos ·")} {talk.attachments.length}/{MAX_TALK_ATTACHMENTS}</b>
+       {talk.attachments.map(attachment=>
+        <div className="talk-attachment-row" key={attachment.id}>
+         <span><FileText size={14}/>{attachment.name}<small>{formatFileSize(attachment.size)}</small></span>
+         <button className="icon-button" onClick={()=>handleDownload(attachment)} aria-label={`${translate("Descargar")} ${attachment.name}`}><Download size={15}/></button>
+        </div>
+       )}
+      </div>
+     }
+
+     <div className="talk-actions">
+      <button className="button primary small" onClick={()=>setReaderId(talk.id)}>
+       <BookOpenText size={15}/> {translate("Leer discurso")}
+      </button>
+      <button className="button secondary small" onClick={()=>edit(talk.id)}>
+       <Pencil size={14}/> {translate("Editar")}
+      </button>
+      <button className="icon-button danger" onClick={()=>handleRemove(talk.id)} aria-label={`${translate("Eliminar ")}${talk.title}`}>
+       <Trash2 size={15}/>
+      </button>
+     </div>
+    </article>)}
+   </div>
+   :
+   <section className="panel">
+    <Empty icon={BookOpenText} title={translate(talks.length?"No hay coincidencias":"Tu biblioteca está vacía")} text={translate(talks.length?"Prueba con otra búsqueda o cambia el filtro.":"Crea un documento y añade temas, textos y etiquetas para encontrarlo fácilmente.")}/>
+   </section>
+  }
+
+  <AnimatePresence>
+   {readerTalk&&
+    <TalkReader
+     talk={readerTalk}
+     onClose={()=>setReaderId(null)}
+     onEdit={()=>{const id=readerTalk.id;setReaderId(null);edit(id);}}
+     onBibleReference={onBibleReference}
+    />
+   }
+  </AnimatePresence>
  </>;
+}
+
+function TalkReader({talk,onClose,onEdit,onBibleReference}:any){
+ const [fontSize,setFontSize]=useState(18);
+
+ const sections=useMemo(()=>{
+  const lines=String(talk.content||"").replace(/\r/g,"").split("\n");
+  const result:{title:string;content:string[]}[]=[];
+  let current:{title:string;content:string[]}={title:translate("Introducción"),content:[]};
+
+  const headingPattern=/^(#{1,3}\s+.+|\d{1,2}[.)]\s+.{3,90}|[IVXLCDM]{1,5}[.)]\s+.{3,90})$/i;
+
+  lines.forEach(line=>{
+   const trimmed=line.trim();
+   if(headingPattern.test(trimmed)){
+    if(current.content.some(item=>item.trim()))result.push(current);
+    current={title:trimmed.replace(/^#{1,3}\s+/,""),content:[]};
+   }else{
+    current.content.push(line);
+   }
+  });
+
+  if(current.content.some(item=>item.trim())||!result.length)result.push(current);
+
+  return result;
+ },[talk.content]);
+
+ const scrollToSection=(index:number)=>{
+  document.getElementById(`talk-reader-section-${index}`)?.scrollIntoView({
+   behavior:"smooth",
+   block:"start"
+  });
+ };
+
+ return (
+  <motion.div
+   className="talk-reader-backdrop"
+   initial={{opacity:0}}
+   animate={{opacity:1}}
+   exit={{opacity:0}}
+   onMouseDown={event=>{if(event.target===event.currentTarget)onClose();}}
+  >
+   <motion.section
+    className="talk-reader-modal"
+    role="dialog"
+    aria-modal="true"
+    aria-label={translate("Lector de discursos")}
+    initial={{opacity:0,y:18,scale:.985}}
+    animate={{opacity:1,y:0,scale:1}}
+    exit={{opacity:0,y:12,scale:.985}}
+    transition={{duration:.22}}
+   >
+    <header className="talk-reader-header">
+     <div className="talk-reader-heading">
+      <span className="eyebrow">{translate("BIBLIOTECA DE DISCURSOS")}</span>
+      <h2>{talk.title}</h2>
+      <p>{translate(talk.kind)}{talk.date?` · ${dateLabel(talk.date,{day:"numeric",month:"long",year:"numeric"})}`:""}</p>
+     </div>
+
+     <div className="talk-reader-controls">
+      <button className="button secondary small" onClick={()=>setFontSize(value=>Math.max(15,value-1))} aria-label={translate("Reducir tamaño de letra")}>A−</button>
+      <button className="button secondary small" onClick={()=>setFontSize(value=>Math.min(24,value+1))} aria-label={translate("Aumentar tamaño de letra")}>A+</button>
+      <button className="icon-button" onClick={onEdit} aria-label={translate("Editar discurso")}><Pencil size={16}/></button>
+      <button className="icon-button" onClick={onClose} aria-label={translate("Cerrar lector")}><X size={18}/></button>
+     </div>
+    </header>
+
+    <div className="talk-reader-body">
+     <aside className="talk-reader-index">
+      <span className="eyebrow">{translate("ÍNDICE")}</span>
+      <nav aria-label={translate("Índice del discurso")}>
+       {sections.map((section,index)=>
+        <button type="button" key={index} onClick={()=>scrollToSection(index)}>
+         <span>{String(index+1).padStart(2,"0")}</span>
+         {section.title}
+        </button>
+       )}
+      </nav>
+     </aside>
+
+     <article className="talk-reader-content">
+      {talk.topic&&<div className="talk-reader-topic">{translate("Tema")} · {talk.topic}</div>}
+
+      {sections.map((section,index)=>
+       <section id={`talk-reader-section-${index}`} className="talk-reader-section" key={index}>
+        {sections.length>1&&<h2>{section.title}</h2>}
+        <p style={{fontSize:`${fontSize}px`}}>{section.content.join("\n").trim()||translate("Sin contenido en esta sección.")}</p>
+       </section>
+      )}
+
+      {talk.texts&&
+       <div className="talk-reader-scriptures">
+        <h3><BookOpenText size={18}/> {translate("Textos bíblicos relacionados")}</h3>
+        <BibleReferenceButtons value={talk.texts} onSelect={onBibleReference}/>
+       </div>
+      }
+
+      <div className="talk-reader-scriptures">
+       <h3><BookOpenText size={18}/> {translate("Referencias bíblicas del discurso")}</h3>
+       <BibleReferenceButtons value={`${talk.content||""} ${talk.texts||""}`} onSelect={onBibleReference}/>
+      </div>
+     </article>
+    </div>
+
+    <footer className="talk-reader-footer">
+     <span>{translate("Fin del documento")}</span>
+     <button className="button secondary small" onClick={onClose}>{translate("Cerrar lectura")}</button>
+    </footer>
+   </motion.section>
+  </motion.div>
+ );
 }
 
 function BibleReferenceButtons({value,onSelect}:{value:string;onSelect:(reference:string)=>void}){
@@ -1123,7 +1768,7 @@ function ProfilePage({profile,save,user}:any){
   />
   <div className="profile-layout">
    <section className="panel profile-card">
-    <div className="profile-avatar-large"><UserRound size={28}/></div>
+    <div className="profile-avatar-large"><CircleUserRound size={31} strokeWidth={1.7}/></div>
     <div>
      <div className="eyebrow">{translate("CUENTA PERSONAL")}</div>
      <h2>{name || translate("Mi perfil")}</h2>
