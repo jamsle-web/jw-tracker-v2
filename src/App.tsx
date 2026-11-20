@@ -104,9 +104,11 @@ const emptyState={
   sound:true, accent:"bosque", lang:"es" as "es"|"en"|"fr"|"pt"
 };
 
-function load():typeof emptyState{
+function load(storageKey: string = KEY): typeof emptyState {
   try {
-    const stored:unknown=JSON.parse(localStorage.getItem(KEY)||"{}");
+    const stored: unknown = JSON.parse(
+  localStorage.getItem(storageKey) || "{}"
+);
     if(!isRecord(stored))return emptyState;
     const talks=Array.isArray(stored.talks)?stored.talks.map((talk:Talk)=>({...talk,attachments:Array.isArray(talk.attachments)?talk.attachments:[]})):emptyState.talks;
     const savedGoals=isRecord(stored.goals)?stored.goals:{};
@@ -399,16 +401,28 @@ function App(){
     }, 8000);
     return () => clearInterval(interval);
   }, []);
+// Guarda los datos localmente en el espacio exclusivo de la cuenta.
 useEffect(() => {
+  const userId = authSession?.user?.id;
+
+  if (
+    authPending ||
+    !userId ||
+    !cloudReady ||
+    syncedUserRef.current !== userId
+  ) {
+    return;
+  }
+
   try {
-    localStorage.setItem(KEY, JSON.stringify(data));
+    const accountKey = `${KEY}:${userId}`;
+
+    localStorage.setItem(accountKey, JSON.stringify(data));
   } catch (error) {
     console.error("Error al guardar los datos localmente:", error);
     setToast("No se pudieron guardar los datos en este dispositivo.");
   }
-}, [data]);
-
-
+}, [data, authPending, authSession?.user?.id, cloudReady]);
 
 // Carga los datos de la cuenta y los informes desde la nube.
 useEffect(() => {
@@ -421,12 +435,22 @@ useEffect(() => {
   }
 
   let cancelled = false;
-
   setCloudReady(false);
 
   const syncAccount = async () => {
-    try {
-      const remoteData = await obtenerDatosCuenta<Partial<typeof emptyState>>();
+  try {
+    // Primero intenta cargar los datos exclusivos de esta cuenta.
+    const accountKey = `${KEY}:${userId}`;
+
+    // Si todavía no existe esa clave, recupera los datos anteriores.
+    const accountLocalData =
+      localStorage.getItem(accountKey) !== null
+        ? load(accountKey)
+        : load(KEY);
+
+    const remoteData =
+      await obtenerDatosCuenta<Partial<typeof emptyState>>();
+
       const remoteReports = await obtenerInformes();
 
       if (cancelled) return;
@@ -434,23 +458,161 @@ useEffect(() => {
       const cloudReports = remoteReports.map(apiReportToLocal);
       const cloudIds = new Set(cloudReports.map(report => report.id));
 
-      setData(current => {
-        const localOnlyReports = current.reports.filter(
-          report => !cloudIds.has(report.id)
-        );
+      setData(() => {
+        type SyncRecord = {
+          id: string;
+          [key: string]: unknown;
+        };
 
-        if (remoteData) {
-          return {
-            ...emptyState,
-            ...remoteData,
-            reports: [...cloudReports, ...localOnlyReports],
-          };
+        const asRecords = (value: unknown): SyncRecord[] =>
+          Array.isArray(value)
+            ? value.filter(
+                (item): item is SyncRecord =>
+                  !!item &&
+                  typeof item === "object" &&
+                  !Array.isArray(item) &&
+                  typeof (item as SyncRecord).id === "string"
+              )
+            : [];
+
+        const cloud = (remoteData ?? {}) as Record<string, unknown>;
+        const local = accountLocalData as unknown as Record<string, unknown>;
+
+        const cloudDeleted =
+          (cloud.deletedRecords ?? {}) as Record<string, unknown>;
+
+        const localDeleted =
+          (local.deletedRecords ?? {}) as Record<string, unknown>;
+
+        const deletedRecords: Record<string, string[]> = {};
+
+        for (const key of new Set([
+          ...Object.keys(cloudDeleted),
+          ...Object.keys(localDeleted),
+        ])) {
+          deletedRecords[key] = [
+            ...new Set([
+              ...(Array.isArray(cloudDeleted[key])
+                ? (cloudDeleted[key] as string[])
+                : []),
+              ...(Array.isArray(localDeleted[key])
+                ? (localDeleted[key] as string[])
+                : []),
+            ]),
+          ];
         }
 
-        return {
-          ...current,
-          reports: [...cloudReports, ...localOnlyReports],
+        // Combina registros: conserva los locales exclusivos,
+        // pero da prioridad a los datos que ya están en la nube.
+        const mergeRecords = (
+          cloudValue: unknown,
+          localValue: unknown,
+          deletedIds: Set<string> = new Set()
+        ): SyncRecord[] => {
+          const merged = new Map<string, SyncRecord>();
+
+          for (const record of asRecords(localValue)) {
+            if (!deletedIds.has(record.id)) {
+              merged.set(record.id, record);
+            }
+          }
+
+          for (const record of asRecords(cloudValue)) {
+            if (!deletedIds.has(record.id)) {
+              merged.set(record.id, {
+                ...merged.get(record.id),
+                ...record,
+              });
+            }
+          }
+
+          return [...merged.values()];
         };
+
+        const collections = [
+          "events",
+          "talks",
+          "reminders",
+          "focusSessions",
+          "meetingSchedules",
+          "meetingPreparations",
+          "studyPlans",
+          "followUps",
+        ];
+
+        const mergedData: Record<string, unknown> = {
+          ...emptyState,
+          ...local,
+          ...cloud,
+          deletedRecords,
+        };
+
+        // Combina las colecciones principales.
+        for (const collection of collections) {
+          mergedData[collection] = mergeRecords(
+            cloud[collection],
+            local[collection],
+            new Set(deletedRecords[collection] ?? [])
+          );
+        }
+
+        // Combina también los elementos internos de los planes.
+        const cloudPlans = asRecords(cloud.studyPlans);
+        const localPlans = asRecords(local.studyPlans);
+
+        mergedData.studyPlans = mergeRecords(
+          cloud.studyPlans,
+          local.studyPlans,
+          new Set(deletedRecords.studyPlans ?? [])
+        ).map(plan => {
+          const cloudPlan = cloudPlans.find(
+            item => item.id === plan.id
+          );
+
+          const localPlan = localPlans.find(
+            item => item.id === plan.id
+          );
+
+          return {
+            ...cloudPlan,
+            ...localPlan,
+            ...plan,
+            items: mergeRecords(
+              cloudPlan?.items,
+              localPlan?.items,
+              new Set(deletedRecords.studyPlanItems ?? [])
+            ),
+          };
+        });
+
+        // Rutinas: primero local y después nube.
+        mergedData.routineDone = {
+          ...((local.routineDone ?? {}) as Record<string, boolean>),
+          ...((cloud.routineDone ?? {}) as Record<string, boolean>),
+        };
+
+        // Perfil: primero local y después nube.
+        mergedData.profile = {
+          ...((local.profile ?? {}) as Record<string, unknown>),
+          ...((cloud.profile ?? {}) as Record<string, unknown>),
+        };
+
+        // Objetivos: primero local y después nube.
+        mergedData.goals = {
+          ...((local.goals ?? {}) as Record<string, unknown>),
+          ...((cloud.goals ?? {}) as Record<string, unknown>),
+        };
+
+        // Conserva informes locales que todavía no estén en la nube.
+        const localOnlyReports = accountLocalData.reports.filter(
+  report => !cloudIds.has(report.id)
+);
+
+        return {
+          ...emptyState,
+          ...mergedData,
+          reports: [...cloudReports, ...localOnlyReports],
+        } as typeof emptyState;
       });
 
       syncedUserRef.current = userId;
@@ -459,6 +621,7 @@ useEffect(() => {
     } catch (error) {
       if (!cancelled) {
         setCloudReady(false);
+
         setToast(
           error instanceof Error
             ? `Sincronización pendiente: ${error.message}`
