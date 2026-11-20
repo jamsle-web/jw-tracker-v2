@@ -92,7 +92,76 @@ const bibleBooks=[
  "Hebreos","Santiago","1 Pedro","2 Pedro","1 Juan","2 Juan","3 Juan","Judas","Apocalipsis"
 ];
 const bibleBookAliases=["Gén","Gn","Éx","Ex","Lev","Lv","Núm","Num","Dt","Deut","Jos","Jue","Juec","1 Sam","1Sa","2 Sam","2Sa","1 Rey","1Re","2 Rey","2Re","1 Cr","1Cr","2 Cr","2Cr","Esd","Neh","Est","Salmos","Salmo","Sal","Sl","Prov","Pr","Ecl","Ec","Cant","Can","Is","Isa","Jer","Lam","Ez","Dan","Ose","Os","Am","Abd","Jon","Miq","Mi","Nah","Hab","Sof","Age","Zac","Mal","Mt","Mat","Mr","Mar","Lu","Lc","Jn","Jua","Hch","Hech","Ro","Rom","1 Cor","1Co","2 Cor","2Co","Gal","Ga","Ef","Fil","Flp","Col","1 Tes","1Te","2 Tes","2Te","1 Tim","1Ti","2 Tim","2Ti","Tit","Flm","Heb","Sant","Stg","1 Ped","1Pe","2 Ped","2Pe","1 Jn","1Jn","2 Jn","2Jn","3 Jn","3Jn","Jud","Apoc","Rev"];
-const bibleBookPattern=[...bibleBooks,...bibleBookAliases].map(book=>book.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")).sort((a,b)=>b.length-a.length).join("|");
+const bibleBookAliasesKreyol = [
+  "Jenèz","Jen",
+  "Egzòd","Egz",
+  "Levitik","Lev",
+  "Nonb","Non",
+  "Detewonòm","Det",
+  "Jozye","Joz",
+  "Jij",
+  "Rit",
+  "1 Samyèl","1 Sam",
+  "2 Samyèl","2 Sam",
+  "1 Wa",
+  "2 Wa",
+  "1 Kwonik","1 Kwo",
+  "2 Kwonik","2 Kwo",
+  "Esdras",
+  "Neyemi","Ney",
+  "Estè",
+  "Jòb",
+  "Sòm","Som",
+  "Pwovèb","Pwo",
+  "Eklezyas","Ekl",
+  "Chan Salomon","Chan",
+  "Ezayi","Eza",
+  "Jeremi","Jer",
+  "Lamantasyon","Lam",
+  "Ezekyèl","Eze",
+  "Danyèl","Dan",
+  "Oze",
+  "Jowèl","Jow",
+  "Amòs","Amo",
+  "Obadya","Oba",
+  "Jonas",
+  "Miche","Mich",
+  "Nawoum","Naw",
+  "Abakouk","Aba",
+  "Sofoni","Sof",
+  "Aje",
+  "Zakari","Zak",
+  "Malachi","Mal",
+  "Matye","Mat",
+  "Mak",
+  "Lik",
+  "Jan",
+  "Travay","Tra",
+  "Women","Wom",
+  "1 Korentyen","1 Kor",
+  "2 Korentyen","2 Kor",
+  "Galat",
+  "Efezyen","Efe",
+  "Filipyen","Fil",
+  "Kolosyen","Kol",
+  "1 Tesalonisyen","1 Tes",
+  "2 Tesalonisyen","2 Tes",
+  "1 Timote","1 Tim",
+  "2 Timote","2 Tim",
+  "Tit",
+  "Filemon",
+  "Ebre",
+  "Jak",
+  "1 Pyè","1 Pye",
+  "2 Pyè","2 Pye",
+  "1 Jan",
+  "2 Jan",
+  "3 Jan",
+  "Jid",
+  "Revelasyon","Rev"
+];
+const bibleBookPattern=
+[...bibleBooks,...bibleBookAliases,...bibleBookAliasesKreyol].map(book=>book.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")).sort((a,b)=>b.length-a.length).join("|");
 const bibleReferencePattern=new RegExp(`(^|[^\\p{L}\\d])(${bibleBookPattern})\\s+\\d{1,3}:\\d{1,3}(?:[-–]\\d{1,3})?(?:,\\s*\\d{1,3}(?:[-–]\\d{1,3})?)*`,"giu");
 
 const emptyState={
@@ -753,7 +822,7 @@ const removeReport=async(id:string)=>{
   const saveTalk=async(form:TalkDraft)=>{
     const {newFiles,removeAttachmentIds,attachments,...talk}=form;
     const storedFiles=newFiles.map(file=>({id:uid(),name:file.name,type:file.type,size:file.size,blob:file}));
-    if(storedFiles.length||removeAttachmentIds.length)await updateStoredAttachments(storedFiles,removeAttachmentIds);
+   if(storedFiles.length||removeAttachmentIds.length){await updateStoredAttachments(storedFiles,removeAttachmentIds);console.log("Adjuntos guardados en IndexedDB:",storedFiles.map(file=>({id:file.id,name:file.name,size:file.size}))); }
     const savedTalk:Talk={...talk,attachments:[...attachments,...storedFiles.map(({blob:_blob,...attachment})=>attachment)]};
     update({talks:editing?data.talks.map(item=>item.id===editing?savedTalk:item):[...data.talks,savedTalk]});
     setModal(null);
@@ -1749,15 +1818,33 @@ function TalksPage({talks,add,edit,remove,downloadAttachment,onBibleReference}:a
      }
 
      <div className="talk-actions">
-      <button className="button primary small" onClick={()=>setReaderId(talk.id)}>
-       <BookOpenText size={15}/> {translate("Leer discurso")}
-      </button>
-      <button className="button secondary small" onClick={()=>edit(talk.id)}>
-       <Pencil size={14}/> {translate("Editar")}
-      </button>
-      <button className="icon-button danger" onClick={()=>handleRemove(talk.id)} aria-label={`${translate("Eliminar ")}${talk.title}`}>
-       <Trash2 size={15}/>
-      </button>
+  <button
+    type="button"
+    className="talk-action-btn talk-action-read"
+    onClick={() => setReaderId(talk.id)}
+  >
+    <BookOpenText size={16} strokeWidth={2} />
+    <span>{translate("Ver discurso")}</span>
+  </button>
+
+  <button
+    type="button"
+    className="talk-action-btn talk-action-edit"
+    onClick={() => edit(talk.id)}
+  >
+    <Pencil size={15} strokeWidth={2} />
+    <span>{translate("Editar")}</span>
+  </button>
+
+  <button
+    type="button"
+    className="talk-action-btn talk-action-delete"
+    onClick={() => handleRemove(talk.id)}
+    aria-label={`${translate("Eliminar ")}${talk.title}`}
+    title={translate("Eliminar")}
+  >
+    <Trash2 size={16} strokeWidth={2} />
+  </button>
      </div>
     </article>)}
    </div>
@@ -1780,11 +1867,67 @@ function TalksPage({talks,add,edit,remove,downloadAttachment,onBibleReference}:a
  </>;
 }
 
+
+async function extractTalkAttachmentText(attachment: TalkAttachment): Promise<string> {
+  const stored = await readStoredAttachment(attachment.id);
+  const extension = attachment.name.split(".").pop()?.toLowerCase();
+
+  if (extension === "pdf") {
+    const pdfjs = await import("pdfjs-dist");
+    const worker = await import("pdfjs-dist/build/pdf.worker.min.mjs?url");
+
+    pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
+
+    const document = await pdfjs.getDocument({
+      data: await stored.blob.arrayBuffer()
+    }).promise;
+
+    const pages: string[] = [];
+
+    for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber++) {
+      const page = await document.getPage(pageNumber);
+      const content = await page.getTextContent();
+
+      pages.push(
+        content.items
+          .filter((item): item is typeof item & { str: string } => "str" in item)
+          .map(item => item.str)
+          .join(" ")
+      );
+    }
+
+    return pages.join("\n\n").trim();
+  }
+
+  if (extension === "docx") {
+    const mammoth = await import("mammoth");
+
+    const result = await mammoth.extractRawText({
+      arrayBuffer: await stored.blob.arrayBuffer()
+    });
+
+    return result.value.trim();
+  }
+
+  if (extension === "doc") {
+    throw new Error(
+      "El formato DOC antiguo debe convertirse a DOCX o PDF para leer su contenido aquí."
+    );
+  }
+
+  throw new Error("Formato de archivo no compatible.");
+}
+
 function TalkReader({talk,onClose,onEdit,onBibleReference}:any){
  const [fontSize,setFontSize]=useState(18);
-
+  const attachments:TalkAttachment[]=Array.isArray(talk.attachments)?talk.attachments:[];
+ const [selectedAttachmentId,setSelectedAttachmentId]=useState(attachments[0]?.id??"");
+ const [attachmentText,setAttachmentText]=useState("");
+ const [attachmentLoading,setAttachmentLoading]=useState(false);
+ const [attachmentError,setAttachmentError]=useState("");
+const readerContent=String(talk.content||"").trim()||attachmentText;
  const sections=useMemo(()=>{
-  const lines=String(talk.content||"").replace(/\r/g,"").split("\n");
+  const lines=readerContent.replace(/\r/g,"").split("\n");
   const result:{title:string;content:string[]}[]=[];
   let current:{title:string;content:string[]}={title:translate("Introducción"),content:[]};
 
@@ -1803,8 +1946,39 @@ function TalkReader({talk,onClose,onEdit,onBibleReference}:any){
   if(current.content.some(item=>item.trim())||!result.length)result.push(current);
 
   return result;
- },[talk.content]);
+ },[readerContent]);
+ useEffect(()=>{
+  let cancelled=false;
 
+  if(!selectedAttachmentId){
+   setAttachmentText("");
+   setAttachmentError("");
+   setAttachmentLoading(false);
+   return;
+  }
+
+  const attachment=attachments.find(item=>item.id===selectedAttachmentId);
+  if(!attachment)return;
+
+  setAttachmentLoading(true);
+  setAttachmentError("");
+  setAttachmentText("");
+
+  extractTalkAttachmentText(attachment)
+   .then(text=>{
+    if(!cancelled)setAttachmentText(text);
+   })
+   .catch(error=>{
+    if(!cancelled)setAttachmentError(
+     error instanceof Error?error.message:"No se pudo leer el archivo adjunto."
+    );
+   })
+   .finally(()=>{
+    if(!cancelled)setAttachmentLoading(false);
+   });
+
+  return ()=>{cancelled=true;};
+ },[selectedAttachmentId,talk.attachments]);
  const scrollToSection=(index:number)=>{
   document.getElementById(`talk-reader-section-${index}`)?.scrollIntoView({
    behavior:"smooth",
@@ -1831,19 +2005,83 @@ function TalkReader({talk,onClose,onEdit,onBibleReference}:any){
     transition={{duration:.22}}
    >
     <header className="talk-reader-header">
-     <div className="talk-reader-heading">
-      <span className="eyebrow">{translate("BIBLIOTECA DE DISCURSOS")}</span>
-      <h2>{talk.title}</h2>
-      <p>{translate(talk.kind)}{talk.date?` · ${dateLabel(talk.date,{day:"numeric",month:"long",year:"numeric"})}`:""}</p>
-     </div>
+  <div className="talk-reader-heading">
+    <div className="talk-reader-title-row">
+      <span className="talk-reader-icon">
+        <BookOpenText size={19} />
+      </span>
 
-     <div className="talk-reader-controls">
-      <button className="button secondary small" onClick={()=>setFontSize(value=>Math.max(15,value-1))} aria-label={translate("Reducir tamaño de letra")}>A−</button>
-      <button className="button secondary small" onClick={()=>setFontSize(value=>Math.min(24,value+1))} aria-label={translate("Aumentar tamaño de letra")}>A+</button>
-      <button className="icon-button" onClick={onEdit} aria-label={translate("Editar discurso")}><Pencil size={16}/></button>
-      <button className="icon-button" onClick={onClose} aria-label={translate("Cerrar lector")}><X size={18}/></button>
-     </div>
-    </header>
+      <div className="talk-reader-title-copy">
+        <span className="eyebrow">
+          {translate("BIBLIOTECA DE DISCURSOS")}
+        </span>
+
+        <h2>{talk.title}</h2>
+
+        <p>
+          {translate(talk.kind)}
+          {talk.date
+            ? ` · ${dateLabel(talk.date, {
+                day: "numeric",
+                month: "long",
+                year: "numeric"
+              })}`
+            : ""}
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <div className="talk-reader-controls">
+    <div
+      className="talk-reader-font-controls"
+      aria-label={translate("Tamaño de letra")}
+    >
+      <button
+        type="button"
+        className="talk-reader-action"
+        onClick={() => setFontSize(value => Math.max(15, value - 1))}
+        aria-label={translate("Reducir tamaño de letra")}
+        title={translate("Reducir letra")}
+      >
+        <Minus size={15} />
+      </button>
+
+      <span>{fontSize}</span>
+
+      <button
+        type="button"
+        className="talk-reader-action"
+        onClick={() => setFontSize(value => Math.min(24, value + 1))}
+        aria-label={translate("Aumentar tamaño de letra")}
+        title={translate("Aumentar letra")}
+      >
+        <Plus size={15} />
+      </button>
+    </div>
+
+    <button
+      type="button"
+      className="talk-reader-action talk-reader-edit"
+      onClick={onEdit}
+      aria-label={translate("Editar discurso")}
+      title={translate("Editar discurso")}
+    >
+      <Pencil size={16} />
+      <span>{translate("Editar")}</span>
+    </button>
+
+    <button
+      type="button"
+      className="talk-reader-action talk-reader-close"
+      onClick={onClose}
+      aria-label={translate("Cerrar lector")}
+      title={translate("Cerrar lector")}
+    >
+      <X size={18} />
+    </button>
+  </div>
+</header>
 
     <div className="talk-reader-body">
      <aside className="talk-reader-index">
@@ -1859,6 +2097,11 @@ function TalkReader({talk,onClose,onEdit,onBibleReference}:any){
      </aside>
 
      <article className="talk-reader-content">
+      {attachmentLoading&&<p className="muted">Preparando documento para lectura...</p>}
+{attachmentError&&<p className="form-error" role="alert">{attachmentError}</p>}
+{!attachmentLoading&&!attachmentError&&!readerContent.trim()&&attachments.length>0&&(
+  <p className="muted">El documento no contiene texto extraíble o no se pudo recuperar su contenido.</p>
+)}
       {talk.topic&&<div className="talk-reader-topic">{translate("Tema")} · {talk.topic}</div>}
 
       {sections.map((section,index)=>
@@ -1877,7 +2120,7 @@ function TalkReader({talk,onClose,onEdit,onBibleReference}:any){
 
       <div className="talk-reader-scriptures">
        <h3><BookOpenText size={18}/> {translate("Referencias bíblicas del discurso")}</h3>
-       <BibleReferenceButtons value={`${talk.content||""} ${talk.texts||""}`} onSelect={onBibleReference}/>
+       <BibleReferenceButtons value={`${readerContent} ${talk.texts||""}`} onSelect={onBibleReference}/>
       </div>
      </article>
     </div>
