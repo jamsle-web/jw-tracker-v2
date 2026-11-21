@@ -2312,8 +2312,30 @@ function TalksPage({talks,add,edit,remove,downloadAttachment,onBibleReference}:a
 }
 
 
+
 async function extractTalkAttachmentText(attachment: TalkAttachment): Promise<string> {
-  const stored = await readStoredAttachment(attachment.id);
+  let stored: { blob: Blob };
+
+  try {
+    stored = await readStoredAttachment(attachment.id);
+  } catch {
+    const blob = await descargarAdjuntoDiscurso(attachment.id);
+
+    stored = { blob };
+
+    try {
+      await updateStoredAttachments(
+        [{ ...attachment, blob }],
+        []
+      );
+    } catch (error) {
+      console.warn(
+        "No se pudo guardar la copia local del adjunto:",
+        error
+      );
+    }
+  }
+
   const extension = attachment.name.split(".").pop()?.toLowerCase();
 
   if (extension === "pdf") {
