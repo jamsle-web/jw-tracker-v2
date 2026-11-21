@@ -7,6 +7,9 @@ import {
   obtenerDatosCuenta,
   guardarDatosCuenta,
   obtenerVersiculoBiblico,
+  descargarAdjuntoDiscurso,
+  subirAdjuntoDiscurso,
+  eliminarAdjuntoDiscurso,
   type Informe
 } from "./api";
 import { authClient } from "./src/auth-client";
@@ -451,7 +454,9 @@ function App(){
   const { data: authSession, isPending: authPending } = authClient.useSession();
   const [data,setData]=useState(load);
   const [cloudReady,setCloudReady]=useState(false);
-  const syncedUserRef=useRef<string|null>(null);
+const syncedUserRef=useRef<string|null>(null);
+const migratedAttachmentsRef = useRef<Set<string>>(new Set());
+const migratingAttachmentsRef = useRef<Map<string, Promise<void>>>(new Map());
   const [,refreshLocale]=useState(0);
   const [page,setPage]=useState<Page>("Inicio");
   const [month,setMonth]=useState(new Date());
@@ -572,8 +577,33 @@ useEffect(() => {
           ];
         }
 
-        // Combina registros: conserva los locales exclusivos,
-        // pero da prioridad a los datos que ya están en la nube.
+
+        // Combina registros respetando la versión más reciente.
+        const getUpdatedAt = (record: SyncRecord): number => {
+          const value = record.updatedAt;
+
+          if (typeof value === "number") {
+            return value < 1_000_000_000_000
+              ? value * 1000
+              : value;
+          }
+
+          if (typeof value === "string") {
+            const numericValue = Number(value);
+
+            if (value.trim() !== "" && Number.isFinite(numericValue)) {
+              return numericValue < 1_000_000_000_000
+                ? numericValue * 1000
+                : numericValue;
+            }
+
+            const parsed = Date.parse(value);
+            return Number.isNaN(parsed) ? 0 : parsed;
+          }
+
+          return 0;
+        };
+
         const mergeRecords = (
           cloudValue: unknown,
           localValue: unknown,
@@ -588,12 +618,24 @@ useEffect(() => {
           }
 
           for (const record of asRecords(cloudValue)) {
-            if (!deletedIds.has(record.id)) {
-              merged.set(record.id, {
-                ...merged.get(record.id),
-                ...record,
-              });
+            if (deletedIds.has(record.id)) continue;
+
+            const localRecord = merged.get(record.id);
+
+            if (!localRecord) {
+              merged.set(record.id, record);
+              continue;
             }
+
+            const localTime = getUpdatedAt(localRecord);
+            const cloudTime = getUpdatedAt(record);
+
+            merged.set(
+              record.id,
+              localTime > cloudTime
+                ? { ...record, ...localRecord }
+                : { ...localRecord, ...record }
+            );
           }
 
           return [...merged.values()];
@@ -647,11 +689,17 @@ useEffect(() => {
             ...cloudPlan,
             ...localPlan,
             ...plan,
+
             items: mergeRecords(
               cloudPlan?.items,
               localPlan?.items,
-              new Set(deletedRecords.studyPlanItems ?? [])
+              new Set(
+                (deletedRecords.studyPlanItems ?? [])
+                  .filter(id => id.startsWith(`${plan.id}:`))
+                  .map(id => id.slice(`${plan.id}:`.length))
+              )
             ),
+
           };
         });
 
@@ -708,6 +756,7 @@ useEffect(() => {
   };
 }, [authPending, authSession?.user?.id]);
 
+
 // Sincroniza los cambios de la cuenta con la nube.
 useEffect(() => {
   const userId = authSession?.user?.id;
@@ -720,22 +769,147 @@ useEffect(() => {
     return;
   }
 
-  const timer = window.setTimeout(() => {
+  const timer = window.setTimeout(async () => {
     const accountData = Object.fromEntries(
       Object.entries(data).filter(([key]) => key !== "reports")
     );
 
-    void guardarDatosCuenta(accountData).catch(error => {
+    const snapshot = JSON.stringify(accountData);
+
+    try {
+      const result = await guardarDatosCuenta(accountData);
+
+      if (!result?.data) return;
+
+      setData(current => {
+        const currentAccountData = Object.fromEntries(
+          Object.entries(current).filter(([key]) => key !== "reports")
+        );
+
+        // No sobrescribir cambios locales realizados durante la petición.
+        if (JSON.stringify(currentAccountData) !== snapshot) {
+          return current;
+        }
+
+        // Evitar renders y subidas repetidas si los datos ya coinciden.
+        if (JSON.stringify(currentAccountData) === JSON.stringify(result.data)) {
+          return current;
+        }
+
+        return {
+          ...current,
+          ...result.data,
+          reports: current.reports,
+        };
+      });
+    } catch (error) {
       setToast(
         error instanceof Error
           ? `No se pudieron guardar los datos: ${error.message}`
           : "Error al guardar los datos en la nube."
       );
-    });
+    }
   }, 700);
 
   return () => window.clearTimeout(timer);
 }, [data, cloudReady, authSession?.user?.id]);
+
+// Migra a la nube los adjuntos antiguos guardados en IndexedDB.
+useEffect(() => {
+  const userId = authSession?.user?.id;
+
+  if (
+    !cloudReady ||
+    !userId ||
+    syncedUserRef.current !== userId
+  ) {
+    return;
+  }
+
+  let cancelled = false;
+
+  const migrateAttachments = async () => {
+    // Esperar a que React termine el ciclo de efectos.
+    await Promise.resolve();
+
+    // No iniciar si este efecto fue cancelado.
+    if (cancelled) return;
+
+    for (const talk of data.talks) {
+      if (cancelled) return;
+
+      for (const attachment of talk.attachments ?? []) {
+        if (cancelled) return;
+
+        const migrationKey = `${userId}:${attachment.id}`;
+
+        if (migratedAttachmentsRef.current.has(migrationKey)) {
+  continue;
+}
+
+const currentMigration = migratingAttachmentsRef.current.get(migrationKey);
+
+if (currentMigration) {
+  try {
+    await currentMigration;
+  } catch {
+    // La subida anterior falló; se permite reintentar.
+  }
+
+  if (cancelled) return;
+
+  if (migratedAttachmentsRef.current.has(migrationKey)) {
+    continue;
+  }
+}
+
+const migration = (async () => {
+  const stored = await readStoredAttachment(attachment.id);
+
+  const file = new File(
+    [stored.blob],
+    stored.name,
+    {
+      type:
+        stored.type ||
+        attachment.type ||
+        "application/octet-stream"
+    }
+  );
+
+  await subirAdjuntoDiscurso(attachment.id, file);
+
+  migratedAttachmentsRef.current.add(migrationKey);
+})();
+
+migratingAttachmentsRef.current.set(migrationKey, migration);
+
+try {
+  await migration;
+} catch (error) {
+  console.error(
+    "No se pudo migrar el adjunto:",
+    attachment.name,
+    error
+  );
+} finally {
+  if (migratingAttachmentsRef.current.get(migrationKey) === migration) {
+    migratingAttachmentsRef.current.delete(migrationKey);
+  }
+}
+
+      }
+    }
+  };
+
+  void migrateAttachments();
+
+  return () => {
+    cancelled = true;
+  };
+}, [data.talks, cloudReady, authSession?.user?.id]);
+
+
   useEffect(()=>{
     setLanguage(data.lang);
     document.documentElement.lang=data.lang;
@@ -755,25 +929,157 @@ useEffect(() => {
   return () => window.clearTimeout(timer);
 }, [authPending, authSession?.user?.id]);
 
-  const update=(patch:Partial<typeof data>)=>setData(d=>({...d,...patch}));
-  const removeSyncedRecord = (
-  collection: "events" | "talks" | "reminders" | "focusSessions" | "meetingSchedules" | "meetingPreparations" | "studyPlans" | "followUps",
+
+  // Actualiza los datos y marca los registros realmente modificados.
+  const update = (patch: Partial<typeof data>) => {
+    setData(current => {
+      const next = { ...current, ...patch };
+      const nextRecord = next as unknown as Record<string, unknown>;
+      const currentRecord = current as unknown as Record<string, unknown>;
+      const patchRecord = patch as Record<string, unknown>;
+      const now = Date.now();
+
+      const collections = [
+        "events",
+        "talks",
+        "reminders",
+        "focusSessions",
+        "meetingSchedules",
+        "meetingPreparations",
+        "studyPlans",
+        "followUps",
+      ] as const;
+
+      const withoutUpdatedAt = (record: Record<string, unknown>) => {
+        const { updatedAt: _updatedAt, ...content } = record;
+        return content;
+      };
+
+      for (const collection of collections) {
+        const incoming = patchRecord[collection];
+
+        if (!Array.isArray(incoming)) continue;
+
+        const previous = Array.isArray(currentRecord[collection])
+          ? currentRecord[collection] as Array<Record<string, unknown>>
+          : [];
+
+        const previousById = new Map(
+          previous.map(record => [String(record.id), record])
+        );
+
+        nextRecord[collection] = incoming.map(
+          (record: Record<string, unknown>) => {
+            const oldRecord = previousById.get(String(record.id));
+
+            if (!oldRecord) {
+              return { ...record, updatedAt: now };
+            }
+
+            const changed =
+              JSON.stringify(withoutUpdatedAt(record)) !==
+              JSON.stringify(withoutUpdatedAt(oldRecord));
+
+            return {
+              ...record,
+              updatedAt: changed
+                ? now
+                : record.updatedAt ?? oldRecord.updatedAt,
+            };
+          }
+        );
+      }
+
+      // También marca individualmente los elementos de los planes.
+      const previousPlans = current.studyPlans as unknown as Array<
+        Record<string, unknown>
+      >;
+
+      const nextPlans = next.studyPlans as unknown as Array<
+        Record<string, unknown>
+      >;
+
+      nextRecord.studyPlans = nextPlans.map(plan => {
+        const oldPlan = previousPlans.find(
+          item => item.id === plan.id
+        );
+
+        const oldItems = Array.isArray(oldPlan?.items)
+          ? oldPlan.items as Array<Record<string, unknown>>
+          : [];
+
+        const items = Array.isArray(plan.items)
+          ? (plan.items as Array<Record<string, unknown>>).map(item => {
+              const oldItem = oldItems.find(
+                previousItem => previousItem.id === item.id
+              );
+
+              if (!oldItem) {
+                return { ...item, updatedAt: now };
+              }
+
+              const changed =
+                JSON.stringify(withoutUpdatedAt(item)) !==
+                JSON.stringify(withoutUpdatedAt(oldItem));
+
+              return {
+                ...item,
+                updatedAt: changed
+                  ? now
+                  : item.updatedAt ?? oldItem.updatedAt,
+              };
+            })
+          : [];
+
+        return { ...plan, items };
+      });
+
+      return nextRecord as unknown as typeof data;
+    });
+  };
+type SyncedCollection =
+  | "events"
+  | "talks"
+  | "reminders"
+  | "focusSessions"
+  | "meetingSchedules"
+  | "meetingPreparations"
+  | "studyPlans"
+  | "followUps";
+
+const removeSyncedRecord = (
+  collection: SyncedCollection,
   id: string
 ) => {
   setData(current => {
-    const records = current[collection] as Array<{ id: string }>;
-    const deleted = current.deletedRecords[collection] ?? [];
+    const currentRecord = current as unknown as Record<string, unknown>;
+
+    const records = Array.isArray(currentRecord[collection])
+      ? currentRecord[collection] as Array<Record<string, unknown>>
+      : [];
+
+    const deletedRecords = (
+      currentRecord.deletedRecords &&
+      typeof currentRecord.deletedRecords === "object"
+    )
+      ? currentRecord.deletedRecords as Record<string, unknown>
+      : {};
+
+    const existingDeleted = Array.isArray(deletedRecords[collection])
+      ? deletedRecords[collection] as string[]
+      : [];
 
     return {
       ...current,
       [collection]: records.filter(record => record.id !== id),
       deletedRecords: {
-        ...current.deletedRecords,
-        [collection]: deleted.includes(id) ? deleted : [...deleted, id],
+        ...deletedRecords,
+        [collection]: [...new Set([...existingDeleted, id])],
       },
-    };
+    } as typeof data;
   });
 };
+
   const t = TRANSLATIONS[data.lang || 'es'];
 
   const events=data.events;
@@ -820,26 +1126,163 @@ const removeReport=async(id:string)=>{
       throw error;
     }
   };
-  const saveTalk=async(form:TalkDraft)=>{
-    const {newFiles,removeAttachmentIds,attachments,...talk}=form;
-    const storedFiles=newFiles.map(file=>({id:uid(),name:file.name,type:file.type,size:file.size,blob:file}));
-   if(storedFiles.length||removeAttachmentIds.length){await updateStoredAttachments(storedFiles,removeAttachmentIds);console.log("Adjuntos guardados en IndexedDB:",storedFiles.map(file=>({id:file.id,name:file.name,size:file.size}))); }
-    const savedTalk:Talk={...talk,attachments:[...attachments,...storedFiles.map(({blob:_blob,...attachment})=>attachment)]};
-    update({talks:editing?data.talks.map(item=>item.id===editing?savedTalk:item):[...data.talks,savedTalk]});
-    setModal(null);
-    setToast(translate("Documento guardado"));
+  const saveTalk = async (form: TalkDraft) => {
+  const { newFiles, removeAttachmentIds, attachments, ...talk } = form;
+
+  const originalTalk = editing
+    ? data.talks.find(item => item.id === editing)
+    : undefined;
+
+  const storedFiles = newFiles.map(file => ({
+    id: uid(),
+    name: file.name,
+    type: file.type,
+    size: file.size,
+    blob: file
+  }));
+
+  // 1. Conservar primero los archivos nuevos localmente.
+  if (storedFiles.length) {
+    await updateStoredAttachments(storedFiles, []);
+  }
+
+  // 2. Eliminar los adjuntos solicitados en el servidor.
+  const deletedIds: string[] = [];
+  const failedRemovalAttachments: TalkAttachment[] = [];
+
+  for (const attachmentId of removeAttachmentIds) {
+    const originalAttachment = originalTalk?.attachments.find(
+      attachment => attachment.id === attachmentId
+    );
+
+    try {
+      await eliminarAdjuntoDiscurso(attachmentId);
+      deletedIds.push(attachmentId);
+    } catch (error) {
+      console.error(
+        "No se pudo eliminar el adjunto remoto:",
+        attachmentId,
+        error
+      );
+
+      // Conservar sus datos si la eliminación remota falla.
+      if (originalAttachment) {
+        failedRemovalAttachments.push(originalAttachment);
+      }
+    }
+  }
+
+  // 3. Eliminar localmente solo los adjuntos eliminados en la nube.
+  if (deletedIds.length) {
+    try {
+      await updateStoredAttachments([], deletedIds);
+    } catch (error) {
+      console.error("No se pudieron eliminar algunas copias locales:", error);
+    }
+  }
+
+  // 4. Conservar los adjuntos cuya eliminación remota falló.
+  const savedTalk: Talk = {
+    ...talk,
+    attachments: [
+      ...attachments,
+      ...storedFiles.map(({ blob: _blob, ...attachment }) => attachment),
+      ...failedRemovalAttachments.filter(
+        failed => !attachments.some(item => item.id === failed.id)
+      )
+    ]
   };
-  const removeTalk=async(id:string)=>{
-  const talk=data.talks.find(item=>item.id===id);
-  if(!talk)return;
-  if(talk.attachments.length)await updateStoredAttachments([],talk.attachments.map(attachment=>attachment.id));
-  removeSyncedRecord("talks",id);
-  setToast(translate("Documento y adjuntos eliminados"));
+
+  // 5. Actualizar el documento.
+  update({
+    talks: editing
+      ? data.talks.map(item => item.id === editing ? savedTalk : item)
+      : [...data.talks, savedTalk]
+  });
+
+  setModal(null);
+
+  // 6. Subir los archivos nuevos a la nube.
+  let failedUploads = 0;
+
+  for (const file of storedFiles) {
+    try {
+      await subirAdjuntoDiscurso(file.id, file.blob);
+    } catch (error) {
+      failedUploads++;
+      console.error("No se pudo sincronizar el adjunto:", file.name, error);
+    }
+  }
+
+  const messages: string[] = [];
+
+  if (failedUploads > 0) {
+    messages.push(`${failedUploads} adjunto(s) pendiente(s) de subir`);
+  }
+
+  if (failedRemovalAttachments.length > 0) {
+    messages.push(
+      `${failedRemovalAttachments.length} adjunto(s) no se pudieron eliminar y se conservaron`
+    );
+  }
+
+  setToast(
+    messages.length
+      ? `Documento guardado. ${messages.join(". ")}.`
+      : translate("Documento guardado")
+  );
 };
-  const downloadTalkAttachment=async(attachment:TalkAttachment)=>{
-    const stored=await readStoredAttachment(attachment.id);
-    downloadBlob(stored.blob,stored.name);
-  };
+ const removeTalk = async (id: string) => {
+  const talk = data.talks.find(item => item.id === id);
+  if (!talk) return;
+
+  try {
+    // Primero eliminamos los adjuntos del servidor.
+    for (const attachment of talk.attachments) {
+      await eliminarAdjuntoDiscurso(attachment.id);
+    }
+
+    // Solo después eliminamos las copias locales.
+    if (talk.attachments.length) {
+      await updateStoredAttachments(
+        [],
+        talk.attachments.map(attachment => attachment.id)
+      );
+    }
+
+    // Finalmente eliminamos el documento.
+    removeSyncedRecord("talks", id);
+    setToast(translate("Documento y adjuntos eliminados"));
+  } catch (error) {
+    console.error("Error al eliminar el documento y sus adjuntos:", error);
+    setToast(
+      error instanceof Error
+        ? `No se pudo completar la eliminación: ${error.message}`
+        : "No se pudo eliminar el documento."
+    );
+  }
+};
+ const downloadTalkAttachment = async (attachment: TalkAttachment) => {
+  let blob: Blob;
+
+  try {
+    const stored = await readStoredAttachment(attachment.id);
+    blob = stored.blob;
+  } catch {
+    blob = await descargarAdjuntoDiscurso(attachment.id);
+
+    try {
+      await updateStoredAttachments(
+        [{ ...attachment, blob }],
+        []
+      );
+    } catch (error) {
+      console.warn("No se pudo guardar la copia local del adjunto:", error);
+    }
+  }
+
+  downloadBlob(blob, attachment.name);
+};
   const saveMeetingSchedule=(schedule:MeetingSchedule)=>{update({meetingSchedules:[...data.meetingSchedules,schedule]});setToast(translate("Horario semanal guardado"));};
  const removeMeetingSchedule=(id:string)=>{
   removeSyncedRecord("meetingSchedules",id);
