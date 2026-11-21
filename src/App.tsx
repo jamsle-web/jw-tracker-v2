@@ -6,6 +6,7 @@ import {
   obtenerInformes,
   obtenerDatosCuenta,
   guardarDatosCuenta,
+  obtenerVersiculoBiblico,
   type Informe
 } from "./api";
 import { authClient } from "./src/auth-client";
@@ -2140,12 +2141,149 @@ function BibleReferenceButtons({value,onSelect}:{value:string;onSelect:(referenc
  return <div className="bible-reference-buttons" aria-label={translate("Referencias bíblicas detectadas")}>{references.map(reference=><button type="button" key={reference} className="bible-reference-chip" onClick={()=>onSelect(reference)}><BookOpenText size={14}/>{reference}</button>)}</div>;
 }
 
-function BibleReferencePanel({reference,minimized,setMinimized,close}:{reference:string;minimized:boolean;setMinimized:(value:boolean)=>void;close:()=>void}){
- const dragControls=useDragControls();
- return <motion.aside className={`bible-reference-panel ${minimized?"minimized":""}`} drag dragControls={dragControls} dragListener={false} dragMomentum={false} dragElastic={0.04} initial={{opacity:0,y:18,scale:.98}} animate={{opacity:1,y:0,scale:1}} exit={{opacity:0,y:12,scale:.98}} transition={{duration:.2}} aria-label={translate("Panel de referencia bíblica")}>
-  <header className="bible-panel-header" onPointerDown={event=>{if(event.target instanceof HTMLElement&&event.target.closest("button"))return;dragControls.start(event);}}><span className="bible-panel-handle"><Move size={14}/></span><span><b>{translate("Referencia bíblica")}</b><small>{reference}</small></span><button className="icon-button" aria-label={translate(minimized?"Restaurar panel":"Minimizar panel")} onClick={()=>setMinimized(!minimized)}>{minimized?<Maximize2 size={16}/>:<Minus size={16}/>}</button><button className="icon-button" aria-label={translate("Cerrar panel bíblico")} onClick={close}><X size={16}/></button></header>
-  {!minimized&&<div className="bible-panel-content"><p>{translate("Consulta esta referencia en el sitio oficial. El panel no reproduce el texto bíblico.")}</p><a className="button primary" href={`https://www.jw.org/es/busqueda/?q=${encodeURIComponent(reference)}`} target="_blank" rel="noreferrer">{translate("Buscar en JW.ORG")}{" "}<ExternalLink size={15}/></a></div>}
- </motion.aside>;
+function BibleReferencePanel({
+  reference,
+  minimized,
+  setMinimized,
+  close
+}: {
+  reference: string;
+  minimized: boolean;
+  setMinimized: (value: boolean) => void;
+  close: () => void;
+}) {
+  const dragControls = useDragControls();
+
+  const [verse, setVerse] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [sourceUrl, setSourceUrl] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadVerse() {
+      setLoading(true);
+      setError("");
+      setVerse("");
+      setSourceUrl("");
+
+      try {
+        const result = await obtenerVersiculoBiblico(reference);
+
+        if (cancelled) return;
+
+        setVerse(result.text);
+        setSourceUrl(result.sourceUrl);
+      } catch {
+        if (cancelled) return;
+
+        setError("No se pudo cargar el versículo. Inténtalo nuevamente.");
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    loadVerse();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [reference]);
+
+  return (
+    <motion.aside
+      className={`bible-reference-panel ${minimized ? "minimized" : ""}`}
+      drag
+      dragControls={dragControls}
+      dragListener={false}
+      dragMomentum={false}
+      dragElastic={0.04}
+      initial={{ opacity: 0, y: 18, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: 12, scale: 0.98 }}
+      transition={{ duration: 0.2 }}
+      aria-label={translate("Panel de referencia bíblica")}
+    >
+      <header
+        className="bible-panel-header"
+        onPointerDown={event => {
+          if (
+            event.target instanceof HTMLElement &&
+            event.target.closest("button")
+          ) return;
+
+          dragControls.start(event);
+        }}
+      >
+        <span className="bible-panel-handle">
+          <Move size={14} />
+        </span>
+
+        <span>
+          <b>{translate("Referencia bíblica")}</b>
+          <small>{reference}</small>
+        </span>
+
+        <button
+          className="icon-button"
+          aria-label={translate(
+            minimized ? "Restaurar panel" : "Minimizar panel"
+          )}
+          onClick={() => setMinimized(!minimized)}
+        >
+          {minimized ? <Maximize2 size={16} /> : <Minus size={16} />}
+        </button>
+
+        <button
+          className="icon-button"
+          aria-label={translate("Cerrar panel bíblico")}
+          onClick={close}
+        >
+          <X size={16} />
+        </button>
+      </header>
+
+      {!minimized && (
+        <div className="bible-panel-content">
+          {loading && (
+            <p aria-live="polite">
+              {translate("Cargando versículo...")}
+            </p>
+          )}
+
+          {!loading && error && (
+            <p role="alert">{translate(error)}</p>
+          )}
+
+          {!loading && !error && verse && (
+            <>
+              <p className="bible-verse-text">
+                {verse}
+              </p>
+
+              <div className="bible-verse-footer">
+                <span>
+                  TNM · Kreyòl ayisyen
+                </span>
+
+                <a
+                  href={sourceUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label="Consultar fuente oficial JW.ORG"
+                >
+                  JW.ORG <ExternalLink size={14} />
+                </a>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </motion.aside>
+  );
 }
 
 function RemindersPage({reminders,add,edit,toggle,remove}:any){

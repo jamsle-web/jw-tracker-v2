@@ -83,3 +83,19 @@ export async function guardarDatosCuenta(
     body: JSON.stringify(data),
   });
 }
+
+export interface VersiculoBiblico {
+  reference: string;
+  text: string;
+  translation: "TNM";
+  language: "ht";
+  sourceUrl: string;
+}
+
+export function obtenerVersiculoBiblico(
+  reference: string
+): Promise<VersiculoBiblico> {
+  return request<VersiculoBiblico>(
+    `/biblia/versiculo?ref=${encodeURIComponent(reference)}`
+  );
+}
