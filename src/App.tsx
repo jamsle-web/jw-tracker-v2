@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getLanguage, getLocale, setLanguage, toStoredLabel, translate } from "./translations";
 import {
   eliminarInforme,
@@ -2393,8 +2393,8 @@ async function extractTalkAttachmentText(attachment: TalkAttachment): Promise<st
   const extension = attachment.name.split(".").pop()?.toLowerCase();
 
   if (extension === "pdf") {
-    const pdfjs = await import("pdfjs-dist");
-    const worker = await import("pdfjs-dist/build/pdf.worker.min.mjs?url");
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const worker = await import("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url");
 
     pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
 
