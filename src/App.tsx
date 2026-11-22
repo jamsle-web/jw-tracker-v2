@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { getLanguage, getLocale, setLanguage, toStoredLabel, translate } from "./translations";
 import {
   eliminarInforme,
@@ -454,6 +454,8 @@ function App(){
   const { data: authSession, isPending: authPending } = authClient.useSession();
   const [data,setData]=useState(load);
   const [cloudReady,setCloudReady]=useState(false);
+  const [syncTrigger, setSyncTrigger] = useState(0);
+  const [localReadyUser, setLocalReadyUser] = useState<string | null>(null);
 const syncedUserRef=useRef<string|null>(null);
 const migratedAttachmentsRef = useRef<Set<string>>(new Set());
 const migratingAttachmentsRef = useRef<Map<string, Promise<void>>>(new Map());
@@ -476,15 +478,14 @@ const migratingAttachmentsRef = useRef<Map<string, Promise<void>>>(new Map());
     }, 8000);
     return () => clearInterval(interval);
   }, []);
-// Guarda los datos localmente en el espacio exclusivo de la cuenta.
+// Guarda los datos localmente aunque la nube no esté disponible.
 useEffect(() => {
   const userId = authSession?.user?.id;
 
   if (
     authPending ||
     !userId ||
-    !cloudReady ||
-    syncedUserRef.current !== userId
+    localReadyUser !== userId
   ) {
     return;
   }
@@ -497,20 +498,48 @@ useEffect(() => {
     console.error("Error al guardar los datos localmente:", error);
     setToast("No se pudieron guardar los datos en este dispositivo.");
   }
-}, [data, authPending, authSession?.user?.id, cloudReady]);
+}, [data, authPending, authSession?.user?.id, localReadyUser]);
+// Reintenta la sincronización al recuperar la conexión.
+useEffect(() => {
+  const retrySync = () => {
+    if (navigator.onLine) {
+      setSyncTrigger(value => value + 1);
+    }
+  };
+
+  const handleVisibility = () => {
+    if (document.visibilityState === "visible") {
+      retrySync();
+    }
+  };
+
+  window.addEventListener("online", retrySync);
+  window.addEventListener("focus", retrySync);
+  document.addEventListener("visibilitychange", handleVisibility);
+
+  return () => {
+    window.removeEventListener("online", retrySync);
+    window.removeEventListener("focus", retrySync);
+    document.removeEventListener("visibilitychange", handleVisibility);
+  };
+}, []);
 
 // Carga los datos de la cuenta y los informes desde la nube.
 useEffect(() => {
   const userId = authSession?.user?.id;
 
   if (authPending || !userId) {
-    setCloudReady(false);
-    syncedUserRef.current = null;
-    return;
-  }
-
-  let cancelled = false;
   setCloudReady(false);
+  setLocalReadyUser(null);
+  syncedUserRef.current = null;
+  return;
+}
+
+let cancelled = false;
+
+setCloudReady(false);
+setLocalReadyUser(null);
+syncedUserRef.current = null;
 
   const syncAccount = async () => {
   try {
@@ -519,12 +548,19 @@ useEffect(() => {
 
     // Si todavía no existe esa clave, recupera los datos anteriores.
     const accountLocalData =
-      localStorage.getItem(accountKey) !== null
-        ? load(accountKey)
-        : load(KEY);
+  localStorage.getItem(accountKey) !== null
+    ? load(accountKey)
+    : load(KEY);
 
-    const remoteData =
-      await obtenerDatosCuenta<Partial<typeof emptyState>>();
+// Primero restaura la cuenta desde el almacenamiento local.
+if (cancelled) return;
+
+setData(accountLocalData);
+setLocalReadyUser(userId);
+
+// Después intenta recuperar los datos de la nube.
+const remoteData =
+  await obtenerDatosCuenta<Partial<typeof emptyState>>();
 
       const remoteReports = await obtenerInformes();
 
@@ -812,7 +848,7 @@ useEffect(() => {
   }, 700);
 
   return () => window.clearTimeout(timer);
-}, [data, cloudReady, authSession?.user?.id]);
+}, [data, cloudReady, authSession?.user?.id, syncTrigger]);
 
 // Migra a la nube los adjuntos antiguos guardados en IndexedDB.
 useEffect(() => {
@@ -2409,7 +2445,12 @@ function TalkReader({talk,onClose,onEdit,onBibleReference}:any){
  const [attachmentText,setAttachmentText]=useState("");
  const [attachmentLoading,setAttachmentLoading]=useState(false);
  const [attachmentError,setAttachmentError]=useState("");
-const readerContent=String(talk.content||"").trim()||attachmentText;
+const readerContent = [
+  String(talk.content || "").trim(),
+  String(attachmentText || "").trim()
+]
+  .filter(Boolean)
+  .join("\n\n");
  const sections=useMemo(()=>{
   const lines=readerContent.replace(/\r/g,"").split("\n");
   const result:{title:string;content:string[]}[]=[];

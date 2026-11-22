@@ -86,4 +86,14 @@ export default defineConfig({
       },
     },
   },
+
+  preview: {
+    proxy: {
+      "/api": {
+        target: "https://jw-tracker-api.porcenatjamsle07.workers.dev",
+        changeOrigin: true,
+        secure: true,
+      },
+    },
+  },
 });
