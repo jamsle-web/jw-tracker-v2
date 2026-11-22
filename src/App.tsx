@@ -1126,7 +1126,8 @@ const removeReport=async(id:string)=>{
       throw error;
     }
   };
-  const saveTalk = async (form: TalkDraft) => {
+
+const saveTalk = async (form: TalkDraft) => {
   const { newFiles, removeAttachmentIds, attachments, ...talk } = form;
 
   const originalTalk = editing
@@ -1136,17 +1137,42 @@ const removeReport=async(id:string)=>{
   const storedFiles = newFiles.map(file => ({
     id: uid(),
     name: file.name,
-    type: file.type,
+    type: file.type || "application/octet-stream",
     size: file.size,
     blob: file
   }));
 
-  // 1. Conservar primero los archivos nuevos localmente.
-  if (storedFiles.length) {
+  // 1. Guardar una copia local antes de iniciar las subidas.
+  if (storedFiles.length > 0) {
     await updateStoredAttachments(storedFiles, []);
   }
 
-  // 2. Eliminar los adjuntos solicitados en el servidor.
+  // 2. Subir y verificar cada archivo antes de publicar el discurso.
+  for (const file of storedFiles) {
+    try {
+      await subirAdjuntoDiscurso(file.id, file.blob);
+
+      const verification = await descargarAdjuntoDiscurso(file.id);
+
+      if (verification.size !== file.size) {
+        throw new Error(
+          `El tamaño del archivo "${file.name}" no coincide después de subirlo.`
+        );
+      }
+    } catch (error) {
+      console.error(
+        "Error al subir o verificar el adjunto:",
+        file.name,
+        error
+      );
+
+      throw new Error(
+        `No se pudo subir o verificar "${file.name}". El formulario permanece abierto para reintentar.`
+      );
+    }
+  }
+
+  // 3. Eliminar los adjuntos anteriores solicitados.
   const deletedIds: string[] = [];
   const failedRemovalAttachments: TalkAttachment[] = [];
 
@@ -1165,27 +1191,31 @@ const removeReport=async(id:string)=>{
         error
       );
 
-      // Conservar sus datos si la eliminación remota falla.
       if (originalAttachment) {
         failedRemovalAttachments.push(originalAttachment);
       }
     }
   }
 
-  // 3. Eliminar localmente solo los adjuntos eliminados en la nube.
-  if (deletedIds.length) {
+  // 4. Eliminar copias locales únicamente después de confirmar el borrado remoto.
+  if (deletedIds.length > 0) {
     try {
       await updateStoredAttachments([], deletedIds);
     } catch (error) {
-      console.error("No se pudieron eliminar algunas copias locales:", error);
+      console.error(
+        "Error eliminando copias locales de los adjuntos:",
+        error
+      );
     }
   }
 
-  // 4. Conservar los adjuntos cuya eliminación remota falló.
+  // 5. Construir el discurso con referencias a archivos verificados.
   const savedTalk: Talk = {
     ...talk,
     attachments: [
-      ...attachments,
+      ...attachments.filter(
+        item => !deletedIds.includes(item.id)
+      ),
       ...storedFiles.map(({ blob: _blob, ...attachment }) => attachment),
       ...failedRemovalAttachments.filter(
         failed => !attachments.some(item => item.id === failed.id)
@@ -1193,32 +1223,19 @@ const removeReport=async(id:string)=>{
     ]
   };
 
-  // 5. Actualizar el documento.
+  // 6. Publicar el discurso después de completar las subidas.
   update({
     talks: editing
-      ? data.talks.map(item => item.id === editing ? savedTalk : item)
+      ? data.talks.map(item =>
+          item.id === editing ? savedTalk : item
+        )
       : [...data.talks, savedTalk]
   });
 
+  // 7. Cerrar el formulario después de completar el proceso.
   setModal(null);
 
-  // 6. Subir los archivos nuevos a la nube.
-  let failedUploads = 0;
-
-  for (const file of storedFiles) {
-    try {
-      await subirAdjuntoDiscurso(file.id, file.blob);
-    } catch (error) {
-      failedUploads++;
-      console.error("No se pudo sincronizar el adjunto:", file.name, error);
-    }
-  }
-
   const messages: string[] = [];
-
-  if (failedUploads > 0) {
-    messages.push(`${failedUploads} adjunto(s) pendiente(s) de subir`);
-  }
 
   if (failedRemovalAttachments.length > 0) {
     messages.push(
@@ -1227,11 +1244,12 @@ const removeReport=async(id:string)=>{
   }
 
   setToast(
-    messages.length
+    messages.length > 0
       ? `Documento guardado. ${messages.join(". ")}.`
       : translate("Documento guardado")
   );
 };
+
  const removeTalk = async (id: string) => {
   const talk = data.talks.find(item => item.id === id);
   if (!talk) return;
@@ -1912,7 +1930,7 @@ const showCompletion=(completed:boolean,seconds:number)=>{
 
     setRemaining(nextRemaining);
 
-    
+
   };
 
   updateTimer();
@@ -2029,7 +2047,7 @@ const toggleTimer=()=>{
     </div>
     <div className="timer-ring" style={{"--progress":`${progress}%`} as React.CSSProperties}><div><strong>{fmt(remaining)}</strong><small>{translate(running?"MANTÉN EL ENFOQUE":"TIEMPO DISPONIBLE")}</small></div></div>
     <div className="timer-controls">
-     <button className="button primary" 
+     <button className="button primary"
      onClick={toggleTimer}>{running?<Pause size={17}/>:<Play size={17}/>} {translate(running?"Pausar":elapsedSeconds?"Reanudar":"Comenzar")}</button>
      {elapsedSeconds>0&&<button className="button secondary" onClick={finishSession}><Check size={16}/> {translate("Guardar tiempo")}</button>}
      <button className="button secondary" onClick={()=>reset()}><RotateCcw size={16}/> {translate("Reiniciar")}</button>
@@ -2041,7 +2059,7 @@ const toggleTimer=()=>{
   <section className="panel focus-history">
    <div className="panel-head"><div><div className="eyebrow">{translate("SEGUIMIENTO PERSONAL")}</div><h3>{translate("Historial de enfoque")}</h3></div><div className="focus-total"><span>{translate("Hoy")}</span><strong>{formatDuration(todaySeconds)}</strong></div></div>
    {history.length?history.map((session:any)=><div className="focus-session-row" key={session.id}><span className="focus-session-icon"><Timer size={17}/></span><div className="event-info"><b>{translate(session.label)}</b><small>{session.date===today()?translate("Hoy"):dateLabel(session.date,{weekday:"short",day:"numeric",month:"short"})}</small></div><strong>{formatDuration(session.seconds)}</strong><button className="icon-button danger" onClick={()=>onRemove(session.id)} aria-label={translate("Eliminar sesión")}><Trash2 size={15}/></button></div>):<Empty icon={History} title={translate("Aún no hay sesiones guardadas")} text={translate("Completa una sesión para empezar tu historial de enfoque.")}/>}
-  
+
   </section>
 
   {/* Ventana animada de finalización */}
