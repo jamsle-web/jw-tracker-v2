@@ -1,11 +1,16 @@
 
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  useSyncExternalStore,
+} from "react";
+
+import { getLanguage } from "./translations";
+
 import {
   ArrowDownToLine,
-  CheckCircle2,
   CircleHelp,
-  Cloud,
-  CloudOff,
   Download,
   RefreshCw,
   Smartphone,
@@ -37,6 +42,7 @@ const labels = {
     close: "Cerrar instrucciones",
     online: "Conexión disponible",
     offline: "Sin conexión a internet",
+    noSignal: "Sin señal",
     installed: "Aplicación instalada",
     browser: "Aplicación en navegador",
     update: "Nueva versión disponible",
@@ -57,6 +63,7 @@ const labels = {
     close: "Close instructions",
     online: "Connection available",
     offline: "No internet connection",
+    noSignal: "No signal",
     installed: "App installed",
     browser: "Browser application",
     update: "New version available",
@@ -77,6 +84,7 @@ const labels = {
     close: "Fermer les instructions",
     online: "Connexion disponible",
     offline: "Pas de connexion Internet",
+    noSignal: "Pas de signal",
     installed: "Application installée",
     browser: "Application dans le navigateur",
     update: "Nouvelle version disponible",
@@ -97,6 +105,7 @@ const labels = {
     close: "Fechar instruções",
     online: "Conexão disponível",
     offline: "Sem conexão com a internet",
+    noSignal: "Sem sinal",
     installed: "Aplicativo instalado",
     browser: "Aplicativo no navegador",
     update: "Nova versão disponível",
@@ -109,30 +118,145 @@ const labels = {
   },
 } satisfies Record<Language, Record<string, string>>;
 
-function readLanguage(): Language {
-  try {
-    const stored: unknown = JSON.parse(
-      localStorage.getItem("jw-tracker-v1") ?? "{}"
-    );
+// ========================================
+// ESTADO DE CONEXIÓN COMPARTIDO
+// ========================================
 
-    if (typeof stored === "object" && stored !== null && "lang" in stored) {
-      const language = stored.lang;
+let onlineSnapshot =
+  typeof navigator !== "undefined" ? navigator.onLine : true;
 
-      if (
-        language === "es" ||
-        language === "en" ||
-        language === "fr" ||
-        language === "pt"
-      ) {
-        return language;
-      }
+const onlineListeners = new Set<() => void>();
+
+const updateOnlineSnapshot = () => {
+  const nextOnline = navigator.onLine;
+
+  if (nextOnline === onlineSnapshot) return;
+
+  onlineSnapshot = nextOnline;
+
+  onlineListeners.forEach(listener => listener());
+};
+
+function subscribeOnline(listener: () => void) {
+  onlineListeners.add(listener);
+
+  if (onlineListeners.size === 1) {
+    onlineSnapshot = navigator.onLine;
+
+    window.addEventListener("online", updateOnlineSnapshot);
+    window.addEventListener("offline", updateOnlineSnapshot);
+  }
+
+  return () => {
+    onlineListeners.delete(listener);
+
+    if (onlineListeners.size === 0) {
+      window.removeEventListener("online", updateOnlineSnapshot);
+      window.removeEventListener("offline", updateOnlineSnapshot);
     }
-  } catch {
-    // Use Spanish as fallback.
+  };
+}
+
+function getOnlineSnapshot() {
+  return onlineSnapshot;
+}
+
+function useOnlineStatus() {
+  return useSyncExternalStore(
+    subscribeOnline,
+    getOnlineSnapshot,
+    () => true
+  );
+}
+
+// ========================================
+// IDIOMA
+// ========================================
+
+function getCurrentLanguage(): Language {
+  const language = getLanguage();
+
+  if (
+    language === "es" ||
+    language === "en" ||
+    language === "fr" ||
+    language === "pt"
+  ) {
+    return language;
   }
 
   return "es";
 }
+
+
+// ========================================
+// INDICADOR DE CONEXIÓN
+// ========================================
+
+export function PwaConnectionStatus() {
+  const online = useOnlineStatus();
+
+  const [language, setLanguage] =
+    useState<Language>(getCurrentLanguage);
+
+  useEffect(() => {
+    const languageChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ lang?: unknown }>).detail;
+
+      if (
+        detail?.lang === "es" ||
+        detail?.lang === "en" ||
+        detail?.lang === "fr" ||
+        detail?.lang === "pt"
+      ) {
+        setLanguage(detail.lang);
+      } else {
+        setLanguage(getCurrentLanguage());
+      }
+    };
+
+    window.addEventListener(
+      "jw-tracker-language-change",
+      languageChanged
+    );
+
+    return () => {
+      window.removeEventListener(
+        "jw-tracker-language-change",
+        languageChanged
+      );
+    };
+  }, []);
+
+  const copy = labels[language];
+
+  return (
+    <div
+      className={`pwa-connection-indicator ${
+        online ? "is-online" : "is-offline"
+      }`}
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      aria-label={online ? copy.online : copy.offline}
+      title={online ? copy.online : copy.offline}
+    >
+      {online ? (
+        <Wifi size={17} aria-hidden="true" />
+      ) : (
+        <>
+          <WifiOff size={17} aria-hidden="true" />
+          <span>{copy.noSignal}</span>
+        </>
+      )}
+    </div>
+  );
+}
+
+
+// ========================================
+// FUNCIONES AUXILIARES PWA
+// ========================================
 
 function isInstallPrompt(event: Event): event is InstallPrompt {
   return "prompt" in event && "userChoice" in event;
@@ -152,13 +276,23 @@ function isAppleMobile(): boolean {
   );
 }
 
+// ========================================
+// CONTROL DE INSTALACIÓN PWA
+// ========================================
+
 export default function PwaInstallControl() {
-  const [language, setLanguage] = useState<Language>(readLanguage);
+  const [language, setLanguage] =
+    useState<Language>(getCurrentLanguage);
+
   const [installPrompt, setInstallPrompt] =
     useState<InstallPrompt | null>(null);
+
   const [showInstructions, setShowInstructions] = useState(false);
+
   const [installed, setInstalled] = useState(isStandalone);
-  const [online, setOnline] = useState(navigator.onLine);
+
+  const online = useOnlineStatus();
+
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [updateError, setUpdateError] = useState(false);
@@ -169,6 +303,10 @@ export default function PwaInstallControl() {
   const closeInstructions = useCallback(() => {
     setShowInstructions(false);
   }, []);
+
+  // ========================================
+  // EVENTOS DE INSTALACIÓN E IDIOMA
+  // ========================================
 
   useEffect(() => {
     const beforeInstall = (event: Event) => {
@@ -184,9 +322,6 @@ export default function PwaInstallControl() {
       setShowInstructions(false);
     };
 
-    const handleOnline = () => setOnline(true);
-    const handleOffline = () => setOnline(false);
-
     const languageChanged = (event: Event) => {
       const detail = (event as CustomEvent<{ lang?: unknown }>).detail;
 
@@ -198,7 +333,7 @@ export default function PwaInstallControl() {
       ) {
         setLanguage(detail.lang);
       } else {
-        setLanguage(readLanguage());
+        setLanguage(getCurrentLanguage());
       }
     };
 
@@ -216,61 +351,117 @@ export default function PwaInstallControl() {
 
     window.addEventListener("beforeinstallprompt", beforeInstall);
     window.addEventListener("appinstalled", appInstalled);
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-    window.addEventListener("jw-tracker-language-change", languageChanged);
+
+    window.addEventListener(
+      "jw-tracker-language-change",
+      languageChanged
+    );
+
     window.addEventListener("keydown", handleEscape);
 
     return () => {
-      displayMode.removeEventListener?.("change", handleDisplayChange);
+      displayMode.removeEventListener?.(
+        "change",
+        handleDisplayChange
+      );
 
       window.removeEventListener("beforeinstallprompt", beforeInstall);
       window.removeEventListener("appinstalled", appInstalled);
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
+
       window.removeEventListener(
         "jw-tracker-language-change",
         languageChanged
       );
+
       window.removeEventListener("keydown", handleEscape);
     };
   }, [closeInstructions]);
+
+  // ========================================
+  // DETECCIÓN DE ACTUALIZACIONES
+  // ========================================
 
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
 
     let active = true;
 
+    let registration: ServiceWorkerRegistration | undefined;
+
+    let observedWorker: ServiceWorker | null = null;
+
+    let workerStateHandler: (() => void) | null = null;
+
+    const checkWaitingWorker = () => {
+      if (
+        active &&
+        registration?.waiting &&
+        navigator.serviceWorker.controller
+      ) {
+        setUpdateAvailable(true);
+      }
+    };
+
+    const observeWorker = (worker: ServiceWorker | null) => {
+      if (!worker || worker === observedWorker) return;
+
+      if (observedWorker && workerStateHandler) {
+        observedWorker.removeEventListener(
+          "statechange",
+          workerStateHandler
+        );
+      }
+
+      observedWorker = worker;
+
+      workerStateHandler = () => {
+        if (!active) return;
+
+        if (worker.state === "installed") {
+          checkWaitingWorker();
+        }
+      };
+
+      worker.addEventListener("statechange", workerStateHandler);
+    };
+
+    const handleUpdateFound = () => {
+      observeWorker(registration?.installing ?? null);
+    };
+
     const checkRegistration = async () => {
       try {
-        const registration =
-          await navigator.serviceWorker.getRegistration();
+        registration = await navigator.serviceWorker.getRegistration();
 
         if (!active || !registration) return;
 
-        if (registration.waiting) {
-          setUpdateAvailable(true);
+        checkWaitingWorker();
+
+        registration.addEventListener(
+          "updatefound",
+          handleUpdateFound
+        );
+
+        observeWorker(registration.installing);
+
+        try {
+          await registration.update();
+        } catch (error) {
+          console.warn(
+            "No se pudo comprobar una actualización PWA.",
+            error
+          );
         }
 
-        const handleUpdateFound = () => {
-          const worker = registration.installing;
+        if (!active) return;
 
-          if (!worker) return;
-
-          worker.addEventListener("statechange", () => {
-            if (
-              active &&
-              worker.state === "installed" &&
-              navigator.serviceWorker.controller
-            ) {
-              setUpdateAvailable(true);
-            }
-          });
-        };
-
-        registration.addEventListener("updatefound", handleUpdateFound);
+        checkWaitingWorker();
+        observeWorker(registration.installing);
       } catch (error) {
-        console.error("Error comprobando actualización PWA:", error);
+        console.error(
+          "Error comprobando actualización PWA:",
+          error
+        );
       }
     };
 
@@ -278,8 +469,24 @@ export default function PwaInstallControl() {
 
     return () => {
       active = false;
+
+      registration?.removeEventListener(
+        "updatefound",
+        handleUpdateFound
+      );
+
+      if (observedWorker && workerStateHandler) {
+        observedWorker.removeEventListener(
+          "statechange",
+          workerStateHandler
+        );
+      }
     };
   }, []);
+
+  // ========================================
+  // INSTALAR APLICACIÓN
+  // ========================================
 
   const handleInstall = async () => {
     if (!installPrompt) {
@@ -290,18 +497,18 @@ export default function PwaInstallControl() {
     try {
       await installPrompt.prompt();
 
-      const choice = await installPrompt.userChoice;
+      await installPrompt.userChoice;
 
       setInstallPrompt(null);
-
-      if (choice.outcome === "accepted") {
-        setInstalled(true);
-      }
     } catch (error) {
       console.error(copy.installError, error);
       setShowInstructions(true);
     }
   };
+
+  // ========================================
+  // ACTUALIZAR APLICACIÓN
+  // ========================================
 
   const handleUpdate = async () => {
     if (!("serviceWorker" in navigator) || updating) return;
@@ -317,71 +524,82 @@ export default function PwaInstallControl() {
         throw new Error("Service Worker no registrado.");
       }
 
-      await registration.update();
-
-      const waitingWorker = registration.waiting;
+      let waitingWorker = registration.waiting;
 
       if (!waitingWorker) {
-        setUpdateAvailable(false);
-        setUpdating(false);
-        return;
+        await registration.update();
+        waitingWorker = registration.waiting;
       }
 
-      const controllerChanged = new Promise<void>(resolve => {
+      if (!waitingWorker) {
+        throw new Error(
+          "La actualización todavía no está preparada."
+        );
+      }
+
+      if (!navigator.serviceWorker.controller) {
+        throw new Error(
+          "La aplicación todavía no está controlada por el Service Worker."
+        );
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        let timeoutId: number;
+
+        const cleanup = () => {
+          window.clearTimeout(timeoutId);
+
+          navigator.serviceWorker.removeEventListener(
+            "controllerchange",
+            handleControllerChange
+          );
+        };
+
+        const handleControllerChange = () => {
+          cleanup();
+          resolve();
+        };
+
+        timeoutId = window.setTimeout(() => {
+          cleanup();
+
+          reject(
+            new Error(
+              "Tiempo de espera agotado al activar la actualización."
+            )
+          );
+        }, 20000);
+
         navigator.serviceWorker.addEventListener(
           "controllerchange",
-          () => resolve(),
-          { once: true }
+          handleControllerChange
         );
+
+        try {
+          waitingWorker.postMessage({
+            type: "SKIP_WAITING",
+          });
+        } catch (error) {
+          cleanup();
+          reject(error);
+        }
       });
-
-      waitingWorker.postMessage({ type: "SKIP_WAITING" });
-
-      await controllerChanged;
 
       window.location.reload();
     } catch (error) {
       console.error(copy.updateError, error);
+
       setUpdateError(true);
       setUpdating(false);
     }
   };
 
+  // ========================================
+  // INTERFAZ
+  // ========================================
+
   return (
     <aside className="pwa-install-control" aria-label="JW Tracker PWA">
-
-      <div
-        className="pwa-status"
-        role="status"
-        aria-live="polite"
-      >
-        {online ? (
-          <span className="pwa-status-item online">
-            <Wifi size={14} aria-hidden="true" />
-            {copy.online}
-          </span>
-        ) : (
-          <span className="pwa-status-item offline">
-            <WifiOff size={14} aria-hidden="true" />
-            {copy.offline}
-          </span>
-        )}
-
-        {installed && (
-          <span className="pwa-status-item installed">
-            <Smartphone size={14} aria-hidden="true" />
-            {copy.installed}
-          </span>
-        )}
-      </div>
-
-      {!online && (
-        <p className="pwa-offline-notice">
-          <CloudOff size={15} aria-hidden="true" />
-          {copy.connection}
-        </p>
-      )}
-
       {updateAvailable && (
         <section className="pwa-update-card" aria-live="polite">
           <div className="pwa-update-info">
@@ -423,6 +641,7 @@ export default function PwaInstallControl() {
             </button>
 
             <h2 id="pwa-install-title">{copy.title}</h2>
+
             <p>{copy.body}</p>
 
             <p className="pwa-install-step">

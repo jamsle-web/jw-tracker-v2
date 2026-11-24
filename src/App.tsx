@@ -14,6 +14,7 @@ import {
 } from "./api";
 import { authClient } from "./src/auth-client";
 import AuthScreen from "./src/AuthScreen";
+import { PwaConnectionStatus } from "./PwaInstallControl";
 
 import { AnimatePresence, motion, useDragControls } from "motion/react";
 import {
@@ -21,8 +22,8 @@ import {
   CircleHelp, LayoutGrid, Plus, ChevronLeft, ChevronRight, Clock3, Check, X, Search,
   Download, Trash2, Pencil, Play, Pause, RotateCcw, Moon, Sun, Sprout, BookMarked,
   GraduationCap, Users, FileText, CircleCheck, CalendarCheck, Volume2,
-UserRound, CircleUserRound,
- Menu, Save, ExternalLink, Sparkles, BookOpen, ArrowUpRight, MoreHorizontal, ShieldCheck, Database,
+  UserRound, CircleUserRound,
+  Menu, Save, ExternalLink, Sparkles, BookOpen, ArrowUpRight, MoreHorizontal, ShieldCheck, Database,
   Flame, Target, MapPin, Tag, History, Upload, Quote, Globe, ChevronDown, Minus, Maximize2, Move
 } from "lucide-react";
 
@@ -1535,6 +1536,7 @@ const saveTalk = async (form: TalkDraft) => {
     <a className="skip-link" href="#main-content" style={{position:"fixed",top:8,left:8,zIndex:9999,transform:"translateY(-160%)",background:"white",padding:10,borderRadius:8}} onFocus={event=>{event.currentTarget.style.transform="translateY(0)";}} onBlur={event=>{event.currentTarget.style.transform="translateY(-160%)";}}>{translate("Saltar al contenido principal")}</a>
     <aside className="sidebar">
       <Brand/>
+       <PwaConnectionStatus />
       <div className="nav-label">{translate("ESPACIO PERSONAL")}</div>
       <nav aria-label={translate("Navegación principal")}>{nav.map(n=><button key={n.name} className={`nav-item ${page===n.name?"active":""}`} aria-current={page===n.name?"page":undefined} onClick={()=>setPage(n.name)}><n.icon size={18}/><span>{translate(n.name)}</span>{n.name==="Recordatorios"&&data.reminders.filter(r=>r.enabled).length>0&&<i/>}</button>)}</nav>
       <div className="sidebar-bottom">
@@ -1545,6 +1547,7 @@ const saveTalk = async (form: TalkDraft) => {
 
 <header className="mobile-header">
   <Brand compact />
+  <PwaConnectionStatus />
   <button
     className="icon-button"
     onClick={() => setPage("Perfil")}

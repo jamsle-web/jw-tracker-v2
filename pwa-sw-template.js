@@ -2,6 +2,11 @@
 const CACHE_NAME = "__CACHE_NAME__";
 const PRECACHE_MANIFEST = "/precache-manifest.json";
 const CACHE_PREFIX = "jw-tracker-";
+self.addEventListener("message", event => {
+  if (event.data?.type === "SKIP_WAITING") {
+    event.waitUntil(self.skipWaiting());
+  }
+});
 
 self.addEventListener("install", event => {
   event.waitUntil((async () => {
@@ -15,7 +20,6 @@ self.addEventListener("install", event => {
     const cache = await caches.open(CACHE_NAME);
 
     await cache.addAll(urls);
-    await self.skipWaiting();
   })());
 });
 
